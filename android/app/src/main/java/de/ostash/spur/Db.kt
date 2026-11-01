@@ -18,11 +18,32 @@ data class DayRow(
 
 data class PointRow(val id: Long, val ts: Long, val lat: Double, val lng: Double, val acc: Float)
 
+data class SiteRow(
+    val id: Long,
+    val name: String,
+    val customerName: String?,
+    val color: String,
+    val lat: Double?,
+    val lng: Double?,
+    val radius: Double,
+)
+
+data class SegmentRow(
+    val id: Long,
+    val dayId: Long,
+    val clientId: String,
+    val siteId: Long?,
+    val kind: String,
+    val startedAt: Long,
+    val endedAt: Long?,
+    val source: String,
+)
+
 /**
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 1) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -45,9 +66,37 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                 synced INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(day_id, ts))""",
         )
+        createSiteTables(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    private fun createSiteTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS sites (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                customer_name TEXT,
+                color TEXT NOT NULL,
+                lat REAL,
+                lng REAL,
+                radius REAL NOT NULL)""",
+        )
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day_id INTEGER NOT NULL,
+                client_id TEXT NOT NULL UNIQUE,
+                site_id INTEGER,
+                kind TEXT NOT NULL DEFAULT 'work',
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                source TEXT NOT NULL DEFAULT 'manual',
+                dirty INTEGER NOT NULL DEFAULT 1)""",
+        )
+    }
+
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) createSiteTables(db)
+    }
 
     private fun day(c: Cursor) = DayRow(
         id = c.getLong(0),
@@ -79,6 +128,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             put("dirty", 1)
         }
         writableDatabase.update("days", cv, "ended_at IS NULL", null)
+        endAllOpenSegments(now)
     }
 
     fun openDay(): DayRow? =
@@ -110,6 +160,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         readableDatabase.rawQuery(
             """SELECT $dayColumns FROM days
                WHERE dirty = 1 OR id IN (SELECT day_id FROM points WHERE synced = 0)
+                  OR id IN (SELECT day_id FROM segments WHERE dirty = 1)
                ORDER BY id""",
             null,
         ).use { c -> buildList { while (c.moveToNext()) add(day(c)) } }
@@ -142,6 +193,121 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             )
         }
     }
+
+
+    // --- Baustellen (Kopie vom Server, auch ohne Internet nutzbar) ---
+    @Synchronized
+    fun replaceSites(list: List<SiteRow>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("sites", null, null)
+            for (s in list) {
+                val cv = ContentValues().apply {
+                    put("id", s.id)
+                    put("name", s.name)
+                    put("customer_name", s.customerName)
+                    put("color", s.color)
+                    if (s.lat != null) put("lat", s.lat) else putNull("lat")
+                    if (s.lng != null) put("lng", s.lng) else putNull("lng")
+                    put("radius", s.radius)
+                }
+                db.insert("sites", null, cv)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun sites(): List<SiteRow> =
+        readableDatabase.rawQuery(
+            "SELECT id, name, customer_name, color, lat, lng, radius FROM sites ORDER BY name COLLATE NOCASE",
+            null,
+        ).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    add(
+                        SiteRow(
+                            c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getString(2), c.getString(3),
+                            if (c.isNull(4)) null else c.getDouble(4), if (c.isNull(5)) null else c.getDouble(5), c.getDouble(6),
+                        ),
+                    )
+                }
+            }
+        }
+
+    // --- Zeitabschnitte (auf welcher Baustelle von wann bis wann) ---
+    private fun segment(c: Cursor) = SegmentRow(
+        id = c.getLong(0),
+        dayId = c.getLong(1),
+        clientId = c.getString(2),
+        siteId = if (c.isNull(3)) null else c.getLong(3),
+        kind = c.getString(4),
+        startedAt = c.getLong(5),
+        endedAt = if (c.isNull(6)) null else c.getLong(6),
+        source = c.getString(7),
+    )
+
+    private val segmentColumns = "id, day_id, client_id, site_id, kind, started_at, ended_at, source"
+
+    fun openSegment(dayId: Long): SegmentRow? =
+        readableDatabase.rawQuery(
+            "SELECT $segmentColumns FROM segments WHERE day_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+            arrayOf(dayId.toString()),
+        ).use { if (it.moveToFirst()) segment(it) else null }
+
+    /** Beendet den laufenden Abschnitt und startet einen neuen auf der gewählten Baustelle. */
+    @Synchronized
+    fun switchSite(dayId: Long, siteId: Long, now: Long, source: String = "manual") {
+        endOpenSegment(dayId, now)
+        val cv = ContentValues().apply {
+            put("day_id", dayId)
+            put("client_id", UUID.randomUUID().toString())
+            put("site_id", siteId)
+            put("kind", "work")
+            put("started_at", now)
+            put("source", source)
+        }
+        writableDatabase.insertOrThrow("segments", null, cv)
+    }
+
+    @Synchronized
+    fun endOpenSegment(dayId: Long, now: Long) {
+        val cv = ContentValues().apply {
+            put("ended_at", now)
+            put("dirty", 1)
+        }
+        writableDatabase.update("segments", cv, "day_id = ? AND ended_at IS NULL", arrayOf(dayId.toString()))
+    }
+
+    @Synchronized
+    fun endAllOpenSegments(now: Long) {
+        val cv = ContentValues().apply {
+            put("ended_at", now)
+            put("dirty", 1)
+        }
+        writableDatabase.update("segments", cv, "ended_at IS NULL", null)
+    }
+
+    fun dirtySegments(dayId: Long): List<SegmentRow> =
+        readableDatabase.rawQuery(
+            "SELECT $segmentColumns FROM segments WHERE day_id = ? AND dirty = 1 ORDER BY id",
+            arrayOf(dayId.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(segment(c)) } }
+
+    /** Nimmt die Markierung nur weg, wenn sich der Abschnitt seit dem Senden nicht geändert hat. */
+    fun clearSegmentDirty(id: Long, endedAtSent: Long?) {
+        if (endedAtSent == null) {
+            writableDatabase.execSQL("UPDATE segments SET dirty = 0 WHERE id = ? AND ended_at IS NULL", arrayOf<Any>(id))
+        } else {
+            writableDatabase.execSQL("UPDATE segments SET dirty = 0 WHERE id = ? AND ended_at = ?", arrayOf<Any>(id, endedAtSent))
+        }
+    }
+
+    fun lastPoint(): PointRow? =
+        readableDatabase.rawQuery("SELECT id, ts, lat, lng, acc FROM points ORDER BY ts DESC LIMIT 1", null)
+            .use { c -> if (c.moveToFirst()) PointRow(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4)) else null }
 
     companion object {
         @Volatile private var instance: Db? = null

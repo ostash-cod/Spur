@@ -19,16 +19,17 @@ object Prefs {
     fun token(c: Context): String? = sp(c).getString("token", null)
     fun userName(c: Context): String = sp(c).getString("name", "") ?: ""
     fun usesPrivateCar(c: Context): Boolean = sp(c).getBoolean("car", false)
+    fun isAdmin(c: Context): Boolean = sp(c).getBoolean("admin", false)
     fun lastSync(c: Context): Long = sp(c).getLong("last_sync", 0L)
 
     fun setLastSync(c: Context, ts: Long) = sp(c).edit().putLong("last_sync", ts).apply()
 
-    fun saveLogin(c: Context, token: String, name: String, usesPrivateCar: Boolean) {
-        sp(c).edit().putString("token", token).putString("name", name).putBoolean("car", usesPrivateCar).apply()
+    fun saveLogin(c: Context, token: String, name: String, usesPrivateCar: Boolean, isAdmin: Boolean) {
+        sp(c).edit().putString("token", token).putString("name", name).putBoolean("car", usesPrivateCar).putBoolean("admin", isAdmin).apply()
     }
 
     /** Meldet ab, die lokalen Tage und Punkte bleiben erhalten, bis sie abgeglichen sind. */
     fun logout(c: Context) {
-        sp(c).edit().remove("token").remove("name").remove("car").apply()
+        sp(c).edit().remove("token").remove("name").remove("car").remove("admin").apply()
     }
 }

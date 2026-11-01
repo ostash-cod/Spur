@@ -1,6 +1,7 @@
 package de.ostash.spur
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -10,12 +11,15 @@ object Api {
     class ApiException(val code: Int, message: String) : Exception(message)
 
     fun login(ctx: Context, code: String): JSONObject =
-        call(ctx, "POST", "/api/login", JSONObject().put("code", code), null)
+        JSONObject(raw(ctx, "POST", "/api/login", JSONObject().put("code", code), null).ifBlank { "{}" })
 
     fun post(ctx: Context, path: String, body: JSONObject, token: String): JSONObject =
-        call(ctx, "POST", path, body, token)
+        JSONObject(raw(ctx, "POST", path, body, token).ifBlank { "{}" })
 
-    private fun call(ctx: Context, method: String, path: String, body: JSONObject?, token: String?): JSONObject {
+    fun getArray(ctx: Context, path: String, token: String): JSONArray =
+        JSONArray(raw(ctx, "GET", path, null, token).ifBlank { "[]" })
+
+    private fun raw(ctx: Context, method: String, path: String, body: JSONObject?, token: String?): String {
         val base = Prefs.serverUrl(ctx)
         if (base.isEmpty()) throw ApiException(0, "Serveradresse fehlt")
         val conn = URL(base + path).openConnection() as HttpURLConnection
@@ -36,7 +40,7 @@ object Api {
                 val msg = runCatching { JSONObject(text).optString("error") }.getOrDefault("")
                 throw ApiException(code, msg.ifBlank { "Fehler $code" })
             }
-            return if (text.isBlank()) JSONObject() else JSONObject(text)
+            return text
         } finally {
             conn.disconnect()
         }

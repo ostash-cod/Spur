@@ -13,6 +13,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,9 +23,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -50,7 +54,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -62,6 +68,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -164,7 +171,7 @@ fun LoginScreen(onDone: () -> Unit) {
                         try {
                             val res = withContext(Dispatchers.IO) { Api.login(ctx, code.trim()) }
                             val user = res.getJSONObject("user")
-                            Prefs.saveLogin(ctx, res.getString("token"), user.getString("name"), user.getBoolean("uses_private_car"))
+                            Prefs.saveLogin(ctx, res.getString("token"), user.getString("name"), user.getBoolean("uses_private_car"), user.optString("role") == "admin")
                             onDone()
                         } catch (e: Api.ApiException) {
                             error = e.message ?: "Fehler"
@@ -195,6 +202,9 @@ fun MainScreen() {
     var tab by remember { mutableIntStateOf(0) }
     var confirmStop by remember { mutableStateOf(false) }
     var permissionHint by remember { mutableStateOf(false) }
+    var pendingSite by remember { mutableStateOf<Long?>(null) }
+    var confirmEndSite by remember { mutableStateOf<SiteRow?>(null) }
+    var showNewSite by remember { mutableStateOf(false) }
 
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
@@ -203,20 +213,32 @@ fun MainScreen() {
         }
     }
     val day = remember(now) { db.openDay() }
+    val segment = remember(now) { day?.let { db.openSegment(it.id) } }
+    val sites = remember(now / 3000) { db.sites() }
+    val currentSite = sites.find { it.id == segment?.siteId }
+
+    // Tag beginnen (falls noch keiner läuft) und, wenn gewünscht, gleich auf einer Baustelle starten.
+    fun beginDay(siteId: Long?) {
+        val d = db.startDayIfNone(System.currentTimeMillis())
+        if (siteId != null) db.switchSite(d.id, siteId, System.currentTimeMillis())
+        TrackingService.start(ctx)
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (hasFineLocation(ctx)) {
             permissionHint = false
-            TrackingService.start(ctx)
+            beginDay(pendingSite)
         } else {
             permissionHint = true
         }
+        pendingSite = null
     }
 
-    fun startDay() {
+    fun startDay(siteId: Long? = null) {
         if (hasFineLocation(ctx)) {
-            TrackingService.start(ctx)
+            beginDay(siteId)
         } else {
+            pendingSite = siteId
             val wanted = buildList {
                 add(Manifest.permission.ACCESS_FINE_LOCATION)
                 add(Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -226,8 +248,23 @@ fun MainScreen() {
         }
     }
 
+    fun onSiteTap(site: SiteRow) {
+        when {
+            day == null -> startDay(site.id)
+            segment?.siteId == site.id -> confirmEndSite = site
+            else -> {
+                db.switchSite(day.id, site.id, System.currentTimeMillis())
+                SyncWorker.enqueue(ctx)
+            }
+        }
+    }
+
     val status = if (day == null) "Tag nicht gestartet" else "Tag läuft seit ${timeFmt.format(Instant.ofEpochMilli(day.startedAt))}"
-    val detail = if (day == null) "Morgens „Tag starten“ drücken" else "Dauer ${formatDuration(now - day.startedAt)} h · GPS-Punkte ${db.countPoints(day.id)}"
+    val detail = when {
+        day == null -> "Morgens „Tag starten“ drücken oder eine Baustelle antippen"
+        segment != null -> "${currentSite?.name ?: "Baustelle"} · ${formatDuration(now - segment.startedAt)} h"
+        else -> "Keine Baustelle gewählt · Dauer ${formatDuration(now - day.startedAt)} h"
+    }
 
     Scaffold(
         containerColor = Hellgrau,
@@ -269,11 +306,37 @@ fun MainScreen() {
                     permissionHint = permissionHint,
                     pending = db.unsyncedPointCount(),
                     now = now,
+                    dayInfo = day?.let { "Tag ${formatDuration(now - it.startedAt)} h · GPS-Punkte ${db.countPoints(it.id)}" },
+                    sites = sites,
+                    runningSegment = segment,
+                    onSiteTap = { onSiteTap(it) },
+                    isAdmin = Prefs.isAdmin(ctx),
+                    onNewSite = { showNewSite = true },
                 )
                 1 -> PlaceholderScreen("Berichte", "Wochen- und Monatsnachweis kommen im nächsten Schritt.")
                 else -> SettingsScreen()
             }
         }
+    }
+
+    confirmEndSite?.let { site ->
+        AlertDialog(
+            onDismissRequest = { confirmEndSite = null },
+            title = { Text("Arbeit auf ${site.name} beenden?") },
+            text = { Text("Zum Beispiel für die Fahrt zur nächsten Baustelle. Du kannst danach eine andere Baustelle antippen.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    day?.let { db.endOpenSegment(it.id, System.currentTimeMillis()) }
+                    confirmEndSite = null
+                    SyncWorker.enqueue(ctx)
+                }) { Text("Ja, beenden", color = Rot, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { confirmEndSite = null }) { Text("Abbrechen") } },
+        )
+    }
+
+    if (showNewSite) {
+        NewSiteDialog(onDismiss = { showNewSite = false }, onCreated = { showNewSite = false })
     }
 
     if (confirmStop) {
@@ -293,18 +356,30 @@ fun MainScreen() {
 }
 
 @Composable
-fun TodayScreen(running: Boolean, onToggle: () -> Unit, permissionHint: Boolean, pending: Int, now: Long) {
+fun TodayScreen(
+    running: Boolean,
+    onToggle: () -> Unit,
+    permissionHint: Boolean,
+    pending: Int,
+    now: Long,
+    dayInfo: String?,
+    sites: List<SiteRow>,
+    runningSegment: SegmentRow?,
+    onSiteTap: (SiteRow) -> Unit,
+    isAdmin: Boolean,
+    onNewSite: () -> Unit,
+) {
     val ctx = LocalContext.current
     val lastSync = Prefs.lastSync(ctx)
     Column(
-        Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Button(
             onClick = onToggle,
             colors = ButtonDefaults.buttonColors(containerColor = if (running) Rot else Gruen, contentColor = Color.White),
-            modifier = Modifier.fillMaxWidth().height(180.dp),
-        ) { Text(if (running) "Tag beenden" else "Tag starten", fontSize = 34.sp, fontWeight = FontWeight.ExtraBold) }
+            modifier = Modifier.fillMaxWidth().height(110.dp),
+        ) { Text(if (running) "Tag beenden" else "Tag starten", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold) }
 
         if (permissionHint) {
             Text(
@@ -313,17 +388,129 @@ fun TodayScreen(running: Boolean, onToggle: () -> Unit, permissionHint: Boolean,
             )
         }
         Text(
-            when {
-                pending == 0 && lastSync > 0 -> "Alles abgeglichen (${timeFmt.format(Instant.ofEpochMilli(lastSync))} Uhr)"
-                pending == 0 -> "Noch nichts aufgezeichnet"
-                else -> "$pending Punkte warten auf den Abgleich (Internet nötig)"
-            },
+            listOfNotNull(
+                dayInfo,
+                when {
+                    pending == 0 && lastSync > 0 -> "Alles abgeglichen (${timeFmt.format(Instant.ofEpochMilli(lastSync))} Uhr)"
+                    pending == 0 -> "Noch nichts aufgezeichnet"
+                    else -> "$pending Punkte warten auf den Abgleich (Internet nötig)"
+                },
+            ).joinToString(" · "),
             color = Color(0xFF6A6F75),
+            fontSize = 14.sp,
         )
-        if (!running) {
-            Text("Der Zeitbalken mit Baustellen kommt im nächsten Schritt.", color = Color(0xFF6A6F75))
+
+        Text("Baustellen", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        if (sites.isEmpty()) {
+            Text(
+                "Noch keine Baustellen. Lege sie am Desktop unter „Kunden und Projekte“ an. Sie erscheinen hier nach dem nächsten Abgleich.",
+                color = Color(0xFF6A6F75),
+            )
+        }
+        for (site in sites) {
+            SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now) { onSiteTap(site) }
+        }
+        if (isAdmin) {
+            OutlinedButton(onClick = onNewSite, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text("Neue Baustelle hier anlegen")
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** Lange Kachel in der Farbe der Baustelle. Die laufende Baustelle hat einen dicken dunklen Rand. */
+@Composable
+fun SiteTile(site: SiteRow, running: SegmentRow?, now: Long, onClick: () -> Unit) {
+    val bg = Color(android.graphics.Color.parseColor(site.color))
+    val fg = if (bg.luminance() > 0.5f) Color(0xFF1B1C1E) else Color.White
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 76.dp)
+            .clip(shape)
+            .background(bg)
+            .then(if (running != null) Modifier.border(5.dp, Color(0xFF1B1C1E), shape) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Column {
+            Text(site.name, color = fg, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+            if (!site.customerName.isNullOrBlank()) Text(site.customerName, color = fg.copy(alpha = 0.85f), fontSize = 14.sp)
+            if (running != null) {
+                Text(
+                    "● läuft seit ${timeFmt.format(Instant.ofEpochMilli(running.startedAt))} · ${formatDuration(now - running.startedAt)} h",
+                    color = fg,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
     }
+}
+
+@Composable
+fun NewSiteDialog(onDismiss: () -> Unit, onCreated: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val point = remember { Db.get(ctx).lastPoint() }
+    val ageMin = if (point == null) Long.MAX_VALUE else (System.currentTimeMillis() - point.ts) / 60_000
+    val fresh = ageMin < 10
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Neue Baustelle hier") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name, zum Beispiel Lilienstraße 77") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, autoCorrectEnabled = false),
+                )
+                Text(
+                    if (fresh) "Position: dein aktueller Standort (vor $ageMin Min.)" else "Kein aktueller Standort. Starte zuerst den Tag und warte kurz.",
+                    color = if (fresh) Color(0xFF6A6F75) else Rot,
+                )
+                Text("Adresse, Kunde und Farbe ergänzt du später am Desktop.", color = Color(0xFF6A6F75), fontSize = 13.sp)
+                if (error.isNotEmpty()) Text(error, color = Rot)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy && fresh && name.isNotBlank(),
+                onClick = {
+                    busy = true
+                    error = ""
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) {
+                                Api.post(
+                                    ctx,
+                                    "/api/sites",
+                                    JSONObject().put("name", name.trim()).put("lat", point!!.lat).put("lng", point.lng),
+                                    Prefs.token(ctx) ?: "",
+                                )
+                            }
+                            SyncWorker.enqueue(ctx)
+                            onCreated()
+                        } catch (e: Api.ApiException) {
+                            error = e.message ?: "Fehler"
+                        } catch (e: Exception) {
+                            error = "Keine Verbindung zum Server"
+                        }
+                        busy = false
+                    }
+                },
+            ) { Text("Anlegen", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
+    )
 }
 
 @Composable

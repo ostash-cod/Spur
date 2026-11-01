@@ -22,6 +22,12 @@ let srv;
   for (let i = 0; i <= 60; i++) points.push({ ts: start + i * 15000, lat: 47.9667 + i * 0.0021 + Math.sin(i / 6) * 0.002, lng: 11.3167 + i * 0.0032, acc: 6 });
   const added = await j(`/api/days/${day.id}/points`, { points }, worker.token);
   console.log('Punkte gespeichert:', added.added);
+  const s1 = await j('/api/sites', { name: 'Lilienstraße 77', lat: 48.12, lng: 11.6 }, admin.token);
+  const s2 = await j('/api/sites', { name: 'Tutzing', lat: 47.9, lng: 11.28 }, admin.token);
+  const seg = await j(`/api/days/${day.id}/segments`, { segments: [
+    { client_id: 'seg-aaaa-0001', site_id: s1.id, kind: 'work', started_at: start + 30 * 60000, ended_at: start + 4 * 3600000, source: 'manual' },
+    { client_id: 'seg-aaaa-0002', site_id: s2.id, kind: 'work', started_at: start + 4.5 * 3600000, ended_at: null, source: 'manual' } ] }, worker.token);
+  console.log('Abschnitte gespeichert:', seg.saved);
 
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -36,6 +42,7 @@ let srv;
   console.log('Überschrift:', await page.textContent('h1'));
   console.log('Karte:', (await page.textContent('.card h2')).trim());
   console.log('Hinweis:', (await page.textContent('.card .hint')).trim());
+  console.log('Abschnitte am Desktop:', (await page.locator('.card table tbody tr').allInnerTexts()).map((x) => x.replace(/\s+/g, ' ')).join(' | '));
   await page.screenshot({ path: '/tmp/spur-e2e2/tag.png' });
   await page.click('text=← Vortag');
   await page.waitForSelector('text=An diesem Tag wurde nichts aufgezeichnet');
