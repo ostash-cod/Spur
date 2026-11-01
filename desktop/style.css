@@ -90,3 +90,9 @@ a:hover { background: rgba(245, 196, 0, 0.35); }
 button.result { display: block; width: 100%; text-align: left; margin-top: 6px; white-space: normal; }
 dialog { max-height: 90vh; overflow: auto; }
 dialog[open] { width: min(94vw, 560px); }
+
+button.danger { color: #b3261e; border-color: #e3b5b2; }
+button.danger:hover { background: #fbeceb; }
+/* Fenster oben ausrichten: wenn sich der Inhalt ändert, rutschen die Felder darüber nicht weg. */
+dialog[open] { margin: 4vh auto auto; }
+#s-found { min-height: 1.6em; }

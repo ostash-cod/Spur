@@ -280,6 +280,36 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl } = {}
     return { added };
   });
 
+  // Zeitabschnitte (auf welcher Baustelle von wann bis wann), vom Handy; gleiche client_id = gleicher Abschnitt.
+  app.post('/api/days/:id/segments', { preHandler: requireUser }, async (req, reply) => {
+    const day = db.prepare('SELECT id FROM days WHERE id = ? AND user_id = ?').get(Number(req.params.id), req.user.id);
+    if (!day) return reply.code(404).send({ error: 'Tag nicht gefunden' });
+    const list = req.body?.segments;
+    if (!Array.isArray(list) || list.length === 0 || list.length > 200) {
+      return reply.code(400).send({ error: 'Es werden 1 bis 200 Abschnitte erwartet' });
+    }
+    const KINDS = ['work', 'travel', 'private', 'break'];
+    for (const s of list) {
+      if (typeof s?.client_id !== 'string' || s.client_id.length < 8 || s.client_id.length > 64) return reply.code(400).send({ error: 'client_id fehlt' });
+      if (!validTs(s.started_at) || (s.ended_at != null && (!validTs(s.ended_at) || s.ended_at < s.started_at))) return reply.code(400).send({ error: 'Zeit ungültig' });
+      if (!KINDS.includes(s.kind ?? 'work')) return reply.code(400).send({ error: 'Art ungültig' });
+      if (s.site_id != null && !db.prepare('SELECT 1 FROM sites WHERE id = ?').get(Number(s.site_id))) return reply.code(400).send({ error: 'Baustelle nicht gefunden' });
+    }
+    const upsert = db.prepare(
+      `INSERT INTO segments (day_id, client_id, site_id, kind, started_at, ended_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(day_id, client_id) DO UPDATE SET site_id = excluded.site_id, kind = excluded.kind, started_at = excluded.started_at, ended_at = excluded.ended_at`,
+    );
+    db.exec('BEGIN');
+    try {
+      for (const s of list) upsert.run(day.id, s.client_id, s.site_id ?? null, s.kind ?? 'work', s.started_at, s.ended_at ?? null, s.source === 'auto' ? 'auto' : 'manual');
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    return { saved: list.length };
+  });
+
   // Chef: Tage eines Mitarbeiters in einem Zeitraum (from/to in Millisekunden), mit allen Punkten.
   app.get('/api/days', { preHandler: requireAdmin }, async (req, reply) => {
     const userId = Number(req.query.user_id);
@@ -292,7 +322,8 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl } = {}
       .prepare('SELECT id, started_at, ended_at FROM days WHERE user_id = ? AND started_at >= ? AND started_at < ? ORDER BY started_at')
       .all(userId, from, to);
     const pointStmt = db.prepare('SELECT ts, lat, lng, acc FROM points WHERE day_id = ? ORDER BY ts');
-    return days.map((d) => ({ ...d, points: pointStmt.all(d.id) }));
+    const segStmt = db.prepare('SELECT client_id, site_id, kind, started_at, ended_at, source FROM segments WHERE day_id = ? ORDER BY started_at');
+    return days.map((d) => ({ ...d, points: pointStmt.all(d.id), segments: segStmt.all(d.id) }));
   });
 
   registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });

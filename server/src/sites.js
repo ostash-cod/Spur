@@ -56,6 +56,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
   const customerRow = (r) => ({
     id: r.id,
     name: r.name,
+    address: r.address,
     email: r.email,
     hourly_rate: r.hourly_rate,
     archived: !!r.archived,
@@ -73,8 +74,8 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
       return reply.code(400).send({ error: 'Stundensatz ungültig' });
     }
     const info = db
-      .prepare('INSERT INTO customers (name, email, hourly_rate) VALUES (?, ?, ?)')
-      .run(name, text(b.email), b.hourly_rate ?? null);
+      .prepare('INSERT INTO customers (name, address, email, hourly_rate) VALUES (?, ?, ?, ?)')
+      .run(name, text(b.address, 300), text(b.email), b.hourly_rate ?? null);
     return reply.code(201).send(customerRow(db.prepare('SELECT * FROM customers WHERE id = ?').get(Number(info.lastInsertRowid))));
   });
 
@@ -87,14 +88,28 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     if (!name) return reply.code(400).send({ error: 'Name fehlt' });
     const rate = b.hourly_rate === undefined ? row.hourly_rate : b.hourly_rate;
     if (rate != null && (!isNum(rate) || rate < 0)) return reply.code(400).send({ error: 'Stundensatz ungültig' });
-    db.prepare('UPDATE customers SET name = ?, email = ?, hourly_rate = ?, archived = ? WHERE id = ?').run(
+    db.prepare('UPDATE customers SET name = ?, address = ?, email = ?, hourly_rate = ?, archived = ? WHERE id = ?').run(
       name,
+      b.address === undefined ? row.address : text(b.address, 300),
       b.email === undefined ? row.email : text(b.email),
       rate ?? null,
       b.archived === undefined ? row.archived : b.archived ? 1 : 0,
       id,
     );
     return customerRow(db.prepare('SELECT * FROM customers WHERE id = ?').get(id));
+  });
+
+  // Löschen nur, wenn nichts mehr daran hängt. Sonst archivieren.
+  app.delete('/api/customers/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!db.prepare('SELECT 1 FROM customers WHERE id = ?').get(id)) {
+      return reply.code(404).send({ error: 'Kunde nicht gefunden' });
+    }
+    if (db.prepare('SELECT 1 FROM sites WHERE customer_id = ?').get(id)) {
+      return reply.code(409).send({ error: 'Zu diesem Kunden gibt es noch Baustellen. Bitte archiviere ihn stattdessen oder lösche zuerst die Baustellen.' });
+    }
+    db.prepare('DELETE FROM customers WHERE id = ?').run(id);
+    return { ok: true };
   });
 
   // --- Baustellen ---
@@ -120,6 +135,11 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     if (b.customer_id != null && !db.prepare('SELECT 1 FROM customers WHERE id = ?').get(Number(b.customer_id))) {
       return reply.code(400).send({ error: 'Kunde nicht gefunden' });
     }
+    let customerId = b.customer_id ?? null;
+    if (customerId == null && b.create_customer === true) {
+      const c = db.prepare('INSERT INTO customers (name, address) VALUES (?, ?)').run(name, text(b.address, 300));
+      customerId = Number(c.lastInsertRowid);
+    }
     let color = b.color;
     if (color != null && !COLOR_RE.test(color)) return reply.code(400).send({ error: 'Farbe ungültig' });
     if (color == null) {
@@ -128,7 +148,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     }
     const info = db
       .prepare('INSERT INTO sites (customer_id, name, address, lat, lng, radius_m, color) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(b.customer_id ?? null, name, text(b.address, 300), b.lat ?? null, b.lng ?? null, b.radius_m ?? null, color.toUpperCase());
+      .run(customerId, name, text(b.address, 300), b.lat ?? null, b.lng ?? null, b.radius_m ?? null, color.toUpperCase());
     const radius = getSettings(db).site_radius_m;
     return reply.code(201).send(siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(Number(info.lastInsertRowid)), radius));
   });
@@ -166,6 +186,18 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     );
     const radius = getSettings(db).site_radius_m;
     return siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), radius);
+  });
+
+  app.delete('/api/sites/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!db.prepare('SELECT 1 FROM sites WHERE id = ?').get(id)) {
+      return reply.code(404).send({ error: 'Baustelle nicht gefunden' });
+    }
+    if (db.prepare('SELECT 1 FROM segments WHERE site_id = ?').get(id)) {
+      return reply.code(409).send({ error: 'Für diese Baustelle sind schon Zeiten gebucht. Bitte archiviere sie stattdessen, sonst gehen Stunden verloren.' });
+    }
+    db.prepare('DELETE FROM sites WHERE id = ?').run(id);
+    return { ok: true };
   });
 
   // --- Koordinaten aus einer Adresse suchen (OpenStreetMap, über den Server) ---

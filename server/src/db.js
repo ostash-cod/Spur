@@ -75,6 +75,17 @@ CREATE TABLE IF NOT EXISTS sites (
   archived INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE TABLE IF NOT EXISTS segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day_id INTEGER NOT NULL REFERENCES days(id),
+  client_id TEXT NOT NULL,
+  site_id INTEGER REFERENCES sites(id),
+  kind TEXT NOT NULL DEFAULT 'work' CHECK (kind IN ('work','travel','private','break')),
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  source TEXT NOT NULL DEFAULT 'manual',
+  UNIQUE (day_id, client_id)
+);
 CREATE TABLE IF NOT EXISTS points (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day_id INTEGER NOT NULL REFERENCES days(id),
@@ -91,6 +102,9 @@ export function openDb(path = ':memory:') {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  // Spätere Ergänzungen an bestehenden Tabellen (läuft bei jedem Start, ist wiederholbar)
+  const hasColumn = (table, column) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+  if (!hasColumn('customers', 'address')) db.exec('ALTER TABLE customers ADD COLUMN address TEXT');
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     insert.run(key, JSON.stringify(value));

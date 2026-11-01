@@ -105,3 +105,75 @@ test('Adresssuche: Treffer, Zwischenspeicher, Fehler, nur Chef', async () => {
   assert.equal(e.statusCode, 502);
   assert.match(e.json().error, /von Hand/);
 });
+
+// --- Wunschliste: Löschen, Kundenadresse, Kunde automatisch, Zeitabschnitte -----------
+test('Kunden: Adresse speichern und löschen nur ohne Baustellen', async () => {
+  const { call, at, wt } = await setup();
+  const c = (await call('POST', '/api/customers', at, { name: 'Bauer', address: 'Hauptstraße 1, 82343 Pöcking' })).json();
+  assert.equal(c.address, 'Hauptstraße 1, 82343 Pöcking');
+  assert.equal((await call('PATCH', `/api/customers/${c.id}`, at, { address: 'Neue Straße 2' })).json().address, 'Neue Straße 2');
+
+  const site = (await call('POST', '/api/sites', at, { name: 'Lilienstraße 77', customer_id: c.id })).json();
+  assert.equal((await call('DELETE', `/api/customers/${c.id}`, wt)).statusCode, 403);
+  const refused = await call('DELETE', `/api/customers/${c.id}`, at);
+  assert.equal(refused.statusCode, 409);
+  assert.match(refused.json().error, /Baustellen/);
+
+  assert.equal((await call('DELETE', `/api/sites/${site.id}`, at)).statusCode, 200);
+  assert.equal((await call('DELETE', `/api/customers/${c.id}`, at)).statusCode, 200);
+  assert.equal((await call('GET', '/api/customers', at)).json().length, 0);
+  assert.equal((await call('DELETE', `/api/customers/${c.id}`, at)).statusCode, 404);
+});
+
+test('Baustelle mit Haken: Kunde mit gleichem Namen und gleicher Adresse wird mit angelegt', async () => {
+  const { call, at } = await setup();
+  const s = (await call('POST', '/api/sites', at, { name: 'Familie Meier', address: 'Dorfstraße 5, Pöcking', create_customer: true })).json();
+  assert.equal(s.customer_name, 'Familie Meier');
+  const customers = (await call('GET', '/api/customers', at)).json();
+  assert.equal(customers.length, 1);
+  assert.equal(customers[0].address, 'Dorfstraße 5, Pöcking');
+  // Mit gewähltem Kunden wird kein zweiter angelegt
+  await call('POST', '/api/sites', at, { name: 'Zweite', customer_id: customers[0].id, create_customer: true });
+  assert.equal((await call('GET', '/api/customers', at)).json().length, 1);
+});
+
+test('Zeitabschnitte: speichern, ändern, prüfen, Löschen der Baustelle gesperrt', async () => {
+  const { db, app, call, at, wt } = await setup();
+  const site = (await call('POST', '/api/sites', at, { name: 'Tutzing', lat: 47.9, lng: 11.28 })).json();
+  const t0 = Date.UTC(2026, 10, 2, 6, 0, 0);
+  const day = (await call('POST', '/api/days', wt, { client_id: 'seg-test-0001', started_at: t0 })).json();
+  const seg = { client_id: 'seg-0001-aaaa', site_id: site.id, kind: 'work', started_at: t0 + 600_000, ended_at: null, source: 'manual' };
+
+  assert.equal((await call('POST', `/api/days/${day.id}/segments`, wt, { segments: [seg] })).statusCode, 200);
+  assert.equal((await call('POST', `/api/days/${day.id}/segments`, wt, { segments: [{ ...seg, ended_at: t0 + 7_200_000 }] })).statusCode, 200, 'gleiche client_id aktualisiert');
+
+  const q = `/api/days?user_id=${db.prepare("SELECT id FROM users WHERE name = 'Mitarbeiter'").get().id}&from=${t0 - 1000}&to=${t0 + 86_400_000}`;
+  const list = (await call('GET', q, at)).json();
+  assert.equal(list[0].segments.length, 1);
+  assert.equal(list[0].segments[0].ended_at, t0 + 7_200_000);
+  assert.equal(list[0].segments[0].site_id, site.id);
+
+  for (const bad of [[], [{ ...seg, client_id: 'x' }], [{ ...seg, site_id: 999 }], [{ ...seg, kind: 'urlaub', client_id: 'seg-0002-bbbb' }], [{ ...seg, ended_at: t0 - 5, client_id: 'seg-0003-cccc' }]]) {
+    assert.equal((await call('POST', `/api/days/${day.id}/segments`, wt, { segments: bad })).statusCode, 400, JSON.stringify(bad).slice(0, 60));
+  }
+  const refused = await call('DELETE', `/api/sites/${site.id}`, at);
+  assert.equal(refused.statusCode, 409);
+  assert.match(refused.json().error, /archiviere/);
+  assert.equal((await call('POST', `/api/days/9999/segments`, wt, { segments: [seg] })).statusCode, 404);
+});
+
+test('Bestehende Datenbank ohne Kundenadresse wird beim Start ergänzt', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const path = join(mkdtempSync(join(tmpdir(), 'spur-mig-')), 'alt.db');
+  const old = new DatabaseSync(path);
+  old.exec('CREATE TABLE customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT, hourly_rate REAL, archived INTEGER NOT NULL DEFAULT 0, created_at TEXT); INSERT INTO customers (name) VALUES (\'Alt\')');
+  old.close();
+  const db = openDb(path);
+  const cols = db.prepare('PRAGMA table_info(customers)').all().map((c) => c.name);
+  assert.ok(cols.includes('address'));
+  assert.equal(db.prepare('SELECT name FROM customers').get().name, 'Alt', 'alte Daten bleiben erhalten');
+  openDb(path); // zweiter Start geht ohne Fehler
+});

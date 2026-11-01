@@ -294,6 +294,16 @@ function showCode(name, code, reload) {
 // --- Kunden und Baustellen -------------------------------------------------
 const SITE_COLORS = ['#2E9E4F', '#7E57C2', '#1E88E5', '#FB8C00', '#00897B', '#D81B60', '#8D6E63', '#3949AB', '#7CB342', '#00ACC1'];
 
+async function deleteWithConfirm(kind, item, path) {
+  if (!confirm(`${kind} „${item.name}“ wirklich löschen? Das kann nicht rückgängig gemacht werden.`)) return;
+  try {
+    await api(path, { method: 'DELETE' });
+    route();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
 async function kunden(main) {
   const [sites, customers] = await Promise.all([api('/sites?all=1'), api('/customers')]);
   const showArchived = sessionStorageGet('show-archived') === '1';
@@ -342,6 +352,7 @@ async function kunden(main) {
           },
           s.archived ? 'Wiederherstellen' : 'Archivieren',
         ),
+        h('button', { class: 'small danger', onclick: () => deleteWithConfirm('Baustelle', s, `/sites/${s.id}`) }, 'Löschen'),
       ),
     ),
   );
@@ -351,6 +362,7 @@ async function kunden(main) {
       'tr',
       { class: c.archived ? 'inaktiv' : '' },
       h('td', {}, h('strong', {}, c.name)),
+      h('td', {}, c.address ?? ''),
       h('td', {}, c.email ?? ''),
       h('td', {}, c.hourly_rate == null ? '–' : `${showNum(c.hourly_rate)} €/h`),
       h(
@@ -368,6 +380,7 @@ async function kunden(main) {
           },
           c.archived ? 'Wiederherstellen' : 'Archivieren',
         ),
+        h('button', { class: 'small danger', onclick: () => deleteWithConfirm('Kunde', c, `/customers/${c.id}`) }, 'Löschen'),
       ),
     ),
   );
@@ -388,8 +401,9 @@ async function kunden(main) {
       { class: 'card' },
       h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Kunden'), h('button', { onclick: () => customerDialog(null) }, 'Neuer Kunde')),
       customerRows.length
-        ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Kunde'), h('th', {}, 'E-Mail'), h('th', {}, 'Stundensatz'), h('th', {}, ''))), h('tbody', {}, customerRows))
+        ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Kunde'), h('th', {}, 'Adresse'), h('th', {}, 'E-Mail'), h('th', {}, 'Stundensatz'), h('th', {}, ''))), h('tbody', {}, customerRows))
         : h('p', { class: 'hint' }, 'Noch kein Kunde angelegt. Ein Kunde ist optional, eine Baustelle geht auch ohne.'),
+      h('p', { class: 'hint' }, 'Löschen geht nur, wenn nichts mehr daran hängt: Ein Kunde ohne Baustellen, eine Baustelle ohne gebuchte Zeiten. Sonst archivieren.'),
     ),
     h(
       'label',
@@ -416,20 +430,70 @@ function sessionStorageSet(k, v) {
 
 function siteDialog(site, customers) {
   const s = site ?? {};
+  const byId = new Map(customers.map((c) => [c.id, c]));
   const name = h('input', { id: 's-name', value: s.name ?? '', placeholder: 'zum Beispiel Lilienstraße 77', style: 'max-width:none' });
   const cust = h(
     'select',
-    { id: 's-cust', style: 'max-width:none' },
+    { id: 's-cust', style: 'max-width:none', onchange: () => updateCustomerUi() },
     h('option', { value: '' }, '– kein Kunde –'),
     customers.filter((c) => !c.archived || c.id === s.customer_id).map((c) => h('option', { value: c.id, selected: c.id === s.customer_id }, c.name)),
   );
-  const addr = h('input', { id: 's-addr', value: s.address ?? '', placeholder: 'Straße Nr, PLZ Ort', style: 'max-width:none' });
-  const lat = h('input', { id: 's-lat', value: showNum(s.lat), inputmode: 'decimal', placeholder: '48,12345' });
-  const lng = h('input', { id: 's-lng', value: showNum(s.lng), inputmode: 'decimal', placeholder: '11,60123' });
+  const copyAddr = h('button', { type: 'button', class: 'small', style: 'margin-top:6px', onclick: () => { const c = byId.get(Number(cust.value)); if (c?.address) { addr.value = c.address; searchNow(true); } } }, 'Adresse vom Kunden übernehmen');
+  const autoCust = h('input', { type: 'checkbox', id: 's-autocust' });
+  const autoCustRow = h('label', { class: 'check' }, autoCust, 'Kunde mit gleichem Namen anlegen');
+  const addr = h('input', { id: 's-addr', value: s.address ?? '', placeholder: 'Straße Nr, PLZ Ort', style: 'max-width:none', oninput: () => scheduleSearch(), onblur: () => searchNow(false) });
+  const lat = h('input', { id: 's-lat', value: showNum(s.lat), inputmode: 'decimal', placeholder: '48,12345', oninput: () => { manualCoords = true; } });
+  const lng = h('input', { id: 's-lng', value: showNum(s.lng), inputmode: 'decimal', placeholder: '11,60123', oninput: () => { manualCoords = true; } });
   const rad = h('input', { id: 's-rad', value: s.radius_custom ? showNum(s.radius_m) : '', inputmode: 'decimal', placeholder: 'Standard' });
-  const results = h('div', { style: 'margin-top:8px' });
+  const found = h('div', { id: 's-found', style: 'margin-top:6px' });
   const err = h('p', { class: 'error' });
   let color = s.color ?? null;
+  let manualCoords = false;
+  let lastQuery = (s.address ?? '').trim();
+  let timer = null;
+  let seq = 0;
+
+  function updateCustomerUi() {
+    const c = byId.get(Number(cust.value));
+    copyAddr.style.display = c?.address ? '' : 'none';
+    autoCustRow.style.display = site || cust.value ? 'none' : '';
+  }
+
+  // Sucht die Koordinaten, sobald die Adresse eingegeben ist, und zeigt den Treffer zur Kontrolle.
+  function scheduleSearch() {
+    clearTimeout(timer);
+    timer = setTimeout(() => searchNow(false), 1200);
+  }
+  async function searchNow(force) {
+    clearTimeout(timer);
+    const q = addr.value.trim();
+    if (q.length < 6 || (!force && q === lastQuery)) return;
+    lastQuery = q;
+    const mine = ++seq;
+    found.replaceChildren(h('p', { class: 'hint' }, 'Sucht die Position …'));
+    try {
+      const hits = await api(`/geocode?q=${encodeURIComponent(q)}`);
+      if (mine !== seq) return;
+      if (!hits.length) {
+        found.replaceChildren(h('p', { class: 'warn' }, 'Zu dieser Adresse wurde nichts gefunden. Trage die Koordinaten von Hand ein (in Google Maps mit der rechten Maustaste auf den Ort klicken).'));
+        return;
+      }
+      const take = (f) => {
+        lat.value = showNum(Number(f.lat.toFixed(6)));
+        lng.value = showNum(Number(f.lng.toFixed(6)));
+        manualCoords = false;
+        found.replaceChildren(h('p', { class: 'hint ok' }, `Gefunden: ${f.label} ✓`), ...(hits.length > 1 ? [h('p', { class: 'hint' }, 'Falsch? Anderen Treffer wählen:'), ...hits.filter((x) => x !== f).map((x) => h('button', { type: 'button', class: 'small result', onclick: () => take(x) }, x.label))] : []));
+      };
+      if (manualCoords && lat.value.trim() !== '') {
+        found.replaceChildren(h('p', { class: 'hint' }, 'Deine Koordinaten bleiben stehen. Treffer zur Auswahl:'), ...hits.map((x) => h('button', { type: 'button', class: 'small result', onclick: () => take(x) }, x.label)));
+      } else {
+        take(hits[0]);
+      }
+    } catch (ex) {
+      if (mine !== seq) return;
+      found.replaceChildren(h('p', { class: 'warn' }, ex.message));
+    }
+  }
 
   const swatchBox = h('div', { class: 'swatches' });
   const drawSwatches = () => {
@@ -442,41 +506,20 @@ function siteDialog(site, customers) {
   };
   drawSwatches();
 
-  const search = h(
-    'button',
-    {
-      type: 'button',
-      onclick: async () => {
-        err.textContent = '';
-        results.replaceChildren(h('p', { class: 'hint' }, 'Sucht …'));
-        try {
-          const found = await api(`/geocode?q=${encodeURIComponent(addr.value)}`);
-          results.replaceChildren(
-            found.length
-              ? h('div', {}, h('p', { class: 'hint' }, 'Treffer anklicken:'), ...found.map((f) => h('button', { type: 'button', class: 'small result', onclick: () => { lat.value = showNum(Number(f.lat.toFixed(6))); lng.value = showNum(Number(f.lng.toFixed(6))); results.replaceChildren(h('p', { class: 'hint ok' }, `Übernommen: ${f.label}`)); } }, f.label)))
-              : h('p', { class: 'hint' }, 'Nichts gefunden. Trage die Koordinaten von Hand ein (in Google Maps mit der rechten Maustaste auf den Ort klicken).'),
-          );
-        } catch (ex) {
-          results.replaceChildren();
-          err.textContent = ex.message;
-        }
-      },
-    },
-    'Koordinaten suchen',
-  );
-
   const d = openDialog(
     h('h2', {}, site ? 'Baustelle bearbeiten' : 'Neue Baustelle'),
     h('label', { for: 's-name' }, 'Name der Baustelle'),
     name,
     h('label', { for: 's-cust' }, 'Kunde (optional)'),
     cust,
-    h('label', { for: 's-addr' }, 'Adresse'),
+    autoCustRow,
+    h('label', { for: 's-addr' }, 'Adresse der Baustelle'),
     addr,
-    h('div', { style: 'margin-top:8px' }, search),
-    results,
+    copyAddr,
+    found,
     h('div', { class: 'row' }, h('div', {}, h('label', { for: 's-lat' }, 'Breite'), lat), h('div', {}, h('label', { for: 's-lng' }, 'Länge'), lng), h('div', {}, h('label', { for: 's-rad' }, 'Radius (m)'), rad)),
-    h('p', { class: 'hint' }, 'Mit den Koordinaten erkennt die App die Ankunft. Der Radius ist optional, ohne Eintrag gilt der Standard aus den Einstellungen.'),
+    h('p', { class: 'hint' }, 'Die Position wird aus der Adresse automatisch gesucht und kann von Hand geändert werden. Mit ihr erkennt die App die Ankunft. Ohne Radius gilt der Standard aus den Einstellungen.'),
+    h('div', {}, h('button', { type: 'button', class: 'small', onclick: () => searchNow(true) }, 'Position erneut suchen')),
     h('label', {}, 'Farbe'),
     swatchBox,
     err,
@@ -494,15 +537,9 @@ function siteDialog(site, customers) {
             const r = num(rad.value);
             if (Number.isNaN(la) || Number.isNaN(ln) || Number.isNaN(r)) return (err.textContent = 'Koordinaten und Radius müssen Zahlen sein.');
             if ((la === null) !== (ln === null)) return (err.textContent = 'Breite und Länge nur zusammen eintragen.');
-            const body = {
-              name: name.value,
-              customer_id: cust.value ? Number(cust.value) : null,
-              address: addr.value,
-              lat: la,
-              lng: ln,
-              radius_m: r,
-            };
+            const body = { name: name.value, customer_id: cust.value ? Number(cust.value) : null, address: addr.value, lat: la, lng: ln, radius_m: r };
             if (color) body.color = color;
+            if (!site && !cust.value && autoCust.checked) body.create_customer = true;
             try {
               await api(site ? `/sites/${site.id}` : '/sites', { method: site ? 'PATCH' : 'POST', body });
               d.close();
@@ -517,11 +554,13 @@ function siteDialog(site, customers) {
       h('button', { onclick: () => d.close() }, 'Abbrechen'),
     ),
   );
+  updateCustomerUi();
   name.focus();
 }
 
 function customerDialog(c) {
   const name = h('input', { id: 'c-name2', value: c?.name ?? '', style: 'max-width:none' });
+  const address = h('input', { id: 'c-addr', value: c?.address ?? '', placeholder: 'Straße Nr, PLZ Ort (Büro oder Rechnungsadresse)', style: 'max-width:none' });
   const email = h('input', { id: 'c-mail', value: c?.email ?? '', type: 'email', style: 'max-width:none' });
   const rate = h('input', { id: 'c-rate', value: showNum(c?.hourly_rate), inputmode: 'decimal', placeholder: 'zum Beispiel 55' });
   const err = h('p', { class: 'error' });
@@ -529,6 +568,8 @@ function customerDialog(c) {
     h('h2', {}, c ? 'Kunde bearbeiten' : 'Neuer Kunde'),
     h('label', { for: 'c-name2' }, 'Name'),
     name,
+    h('label', { for: 'c-addr' }, 'Adresse des Kunden'),
+    address,
     h('label', { for: 'c-mail' }, 'E-Mail (für den Versand der Stundennachweise)'),
     email,
     h('label', { for: 'c-rate' }, 'Stundensatz in Euro'),
@@ -545,7 +586,7 @@ function customerDialog(c) {
             const r = num(rate.value);
             if (Number.isNaN(r)) return (err.textContent = 'Der Stundensatz muss eine Zahl sein.');
             try {
-              await api(c ? `/customers/${c.id}` : '/customers', { method: c ? 'PATCH' : 'POST', body: { name: name.value, email: email.value, hourly_rate: r } });
+              await api(c ? `/customers/${c.id}` : '/customers', { method: c ? 'PATCH' : 'POST', body: { name: name.value, address: address.value, email: email.value, hourly_rate: r } });
               d.close();
               route();
             } catch (ex) {
@@ -607,6 +648,30 @@ function trackSvg(points) {
   );
 }
 
+
+const KIND_LABEL = { work: 'Arbeit', travel: 'Anfahrt', private: 'Privat', break: 'Pause' };
+const KIND_COLOR = { travel: '#F5C400', private: '#B8BCC2', break: '#B8BCC2' };
+
+// Zeitabschnitte eines Tages: wo von wann bis wann gearbeitet wurde.
+function segmentList(day, siteById) {
+  if (!day.segments?.length) return h('p', { class: 'hint' }, 'Noch keine Baustelle gewählt.');
+  const rows = day.segments.map((s) => {
+    const site = s.site_id != null ? siteById.get(s.site_id) : null;
+    const end = s.ended_at ?? Date.now();
+    const color = site?.color ?? KIND_COLOR[s.kind] ?? '#B8BCC2';
+    return h(
+      'tr',
+      {},
+      h('td', {}, h('span', { class: 'dot', style: `background:${color}` })),
+      h('td', {}, h('strong', {}, site?.name ?? KIND_LABEL[s.kind] ?? s.kind), site?.customer_name ? h('span', { class: 'hint' }, ` · ${site.customer_name}`) : null),
+      h('td', {}, `${fmtTime(s.started_at)} bis ${s.ended_at ? fmtTime(s.ended_at) : 'läuft noch'}`),
+      h('td', {}, fmtDuration(end - s.started_at)),
+      h('td', {}, s.source === 'auto' ? 'automatisch' : 'von Hand'),
+    );
+  });
+  return h('table', { style: 'margin:6px 0 10px' }, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Baustelle'), h('th', {}, 'Zeit'), h('th', {}, 'Dauer'), h('th', {}, 'Wie'))), h('tbody', {}, rows));
+}
+
 async function tagesansicht(main, userId, dateStr) {
   const users = await api('/users');
   const user = users.find((u) => u.id === userId);
@@ -615,7 +680,8 @@ async function tagesansicht(main, userId, dateStr) {
   const [yy, mm, dd] = date.split('-').map(Number);
   const from = new Date(yy, mm - 1, dd).getTime();
   const to = new Date(yy, mm - 1, dd + 1).getTime();
-  const days = await api(`/days?user_id=${userId}&from=${from}&to=${to}`);
+  const [days, sites] = await Promise.all([api(`/days?user_id=${userId}&from=${from}&to=${to}`), api('/sites?all=1')]);
+  const siteById = new Map(sites.map((x) => [x.id, x]));
 
   const go = (offset) => {
     location.hash = `#/mitarbeiter/${userId}/${toDateStr(new Date(yy, mm - 1, dd + offset))}`;
@@ -636,6 +702,7 @@ async function tagesansicht(main, userId, dateStr) {
           { class: 'card' },
           h('h2', {}, `${fmtTime(d.started_at)} bis ${d.ended_at ? fmtTime(d.ended_at) : 'läuft noch'} · ${fmtDuration(end - d.started_at)}`),
           h('p', { class: 'hint' }, `${d.points.length} GPS-Punkte`),
+          segmentList(d, siteById),
           trackSvg(d.points),
         );
       })

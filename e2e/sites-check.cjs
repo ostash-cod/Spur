@@ -12,6 +12,13 @@ let srv;
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const problems = [];
   page.on('pageerror', (e) => problems.push('pageerror: ' + e.message));
+  await page.route('**/api/geocode*', (route) => {
+    const q = new URL(route.request().url()).searchParams.get('q');
+    if (/Nirgendwo/.test(q)) return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([
+      { label: 'Lilienstraße 77, 81669 München', lat: 48.123456, lng: 11.601234 },
+      { label: 'Lilienstraße 77, 12345 Anderswo', lat: 50.1, lng: 8.2 } ]) });
+  });
   await page.goto(base + '/');
   await page.fill('#code', code); await page.click('#login-form button');
   await page.waitForSelector('table');
@@ -29,10 +36,15 @@ let srv;
   await page.click('button:has-text("Neue Baustelle")');
   await page.fill('#s-name', 'Lilienstraße 77'); await page.selectOption('#s-cust', { label: 'WEG Lilienstraße' });
   await page.fill('#s-addr', 'Lilienstraße 77, 81669 München');
-  await page.click('button:has-text("Koordinaten suchen")');
-  await page.waitForSelector('dialog .error:not(:empty)');
-  console.log('Adresssuche ohne Internet ->', (await page.textContent('dialog .error')).slice(0, 70));
+  await page.click('#s-name'); // Adressfeld verlassen löst die Suche aus
+  await page.waitForSelector('#s-found .ok');
+  console.log('Automatisch gefunden:', (await page.textContent('#s-found .ok')).trim());
+  console.log('Koordinaten gefüllt:', await page.inputValue('#s-lat'), await page.inputValue('#s-lng'));
+  await page.click('#s-found button.result');
+  console.log('Anderen Treffer gewählt:', await page.inputValue('#s-lat'));
   await page.fill('#s-lat', '48,1234'); await page.fill('#s-lng', '11,6012');
+  await page.fill('#s-addr', 'Lilienstraße 77, 81669 München Nord'); await page.fill('#s-name', 'Lilienstraße 77'); await page.waitForTimeout(1600);
+  console.log('Von Hand eingetragene Koordinaten bleiben:', await page.inputValue('#s-lat'));
   await page.click('dialog button.primary');
   await page.waitForSelector('td strong:has-text("Lilienstraße 77")');
   const row = page.locator('tbody tr', { hasText: 'Lilienstraße 77' }).first();
@@ -55,6 +67,38 @@ let srv;
   await page.waitForSelector('tbody tr:has-text("Tutzing"):has-text("150 m")');
   console.log('Bearbeitet: ok');
 
+  // Kunde mit gleichem Namen automatisch anlegen
+  await page.click('button:has-text("Neue Baustelle")');
+  await page.fill('#s-name', 'Familie Meier'); await page.fill('#s-addr', 'Dorfstraße 5, Pöcking');
+  await page.check('#s-autocust');
+  await page.click('dialog button.primary');
+  await page.waitForSelector('td:has-text("Familie Meier")');
+  console.log('Kunde automatisch angelegt:', (await page.locator('tbody tr', { hasText: 'Familie Meier' }).first().innerText()).replace(/\s+/g, ' ').slice(0, 80));
+
+  // Adresse vom Kunden übernehmen
+  await page.click('button:has-text("Neuer Kunde")');
+  await page.fill('#c-name2', 'Hausverwaltung Schmidt'); await page.fill('#c-addr', 'Bürostraße 9, 80331 München');
+  await page.click('dialog button.primary');
+  await page.waitForSelector('td:has-text("Bürostraße 9")');
+  await page.click('button:has-text("Neue Baustelle")');
+  await page.fill('#s-name', 'Balkon Schmidt'); await page.selectOption('#s-cust', { label: 'Hausverwaltung Schmidt' });
+  await page.click('button:has-text("Adresse vom Kunden übernehmen")');
+  console.log('Adresse übernommen:', await page.inputValue('#s-addr'));
+  await page.waitForSelector('#s-found .ok');
+  await page.click('dialog button.primary');
+  await page.waitForSelector('td strong:has-text("Balkon Schmidt")');
+
+  // Nichts gefunden
+  await page.click('button:has-text("Neue Baustelle")');
+  await page.fill('#s-addr', 'Nirgendwo Straße 1'); await page.click('#s-name');
+  await page.waitForSelector('#s-found .warn');
+  console.log('Nichts gefunden:', (await page.textContent('#s-found .warn')).slice(0, 50));
+  await page.click('dialog button:has-text("Abbrechen")');
+
+  // Löschen: Kunde mit Baustelle ist gesperrt, danach erlaubt
+  page.on('dialog', (d) => d.accept());
+  const dialogs = [];
+  page.on('dialog', (d) => dialogs.push(d.message()));
   // Archivieren und wieder anzeigen
   await page.locator('tbody tr', { hasText: 'Tutzing' }).locator('button:has-text("Archivieren")').click();
   await page.waitForFunction(() => !document.body.innerText.includes('Tutzing'));
@@ -65,6 +109,13 @@ let srv;
   // Die Handy-API liefert nur aktive, nicht archivierte Baustellen
   const tok = (await (await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json()).token;
   const sites = await (await fetch(base + '/api/sites', { headers: { Authorization: 'Bearer ' + tok } })).json();
+  // Baustelle ohne Zeiten löschen
+  await page.locator('tbody tr', { hasText: 'Balkon Schmidt' }).locator('button:has-text("Löschen")').click();
+  await page.waitForFunction(() => !document.body.innerText.includes('Balkon Schmidt'));
+  // Kunde ohne Baustellen löschen
+  await page.locator('tbody tr', { hasText: 'Hausverwaltung Schmidt' }).locator('button:has-text("Löschen")').click();
+  await page.waitForFunction(() => !document.body.innerText.includes('Hausverwaltung Schmidt'));
+  console.log('Löschen: ok (Dialoge:', dialogs.length, ')');
   console.log('Für das Handy:', sites.map((s) => `${s.name} (${s.color}, ${s.radius_m} m)`).join('; '));
   console.log('Probleme:', problems.length ? problems : 'keine');
   await browser.close(); srv.kill();
