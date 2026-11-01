@@ -105,11 +105,47 @@ export function openDb(path = ':memory:') {
   // Spätere Ergänzungen an bestehenden Tabellen (läuft bei jedem Start, ist wiederholbar)
   const hasColumn = (table, column) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
   if (!hasColumn('customers', 'address')) db.exec('ALTER TABLE customers ADD COLUMN address TEXT');
+  if (!hasColumn('sites', 'system')) db.exec('ALTER TABLE sites ADD COLUMN system TEXT');
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     insert.run(key, JSON.stringify(value));
   }
+  ensureSystemSites(db);
   return db;
+}
+
+const SYSTEM_SITES = {
+  lager: { name: 'Lager', color: '#546E7A' },
+  firma: { name: 'Firma', color: '#37474F' },
+};
+
+// Lager und Firma sind feste Orte. Ihre Position kommt aus den Einstellungen.
+export function ensureSystemSites(db) {
+  const settings = getSettings(db);
+  for (const [key, def] of Object.entries(SYSTEM_SITES)) {
+    const place = settings[key] ?? {};
+    const address = key === 'firma' ? settings.company?.address ?? null : null;
+    const row = db.prepare('SELECT id FROM sites WHERE system = ?').get(key);
+    if (row) {
+      db.prepare('UPDATE sites SET lat = ?, lng = ?, radius_m = ?, address = COALESCE(?, address) WHERE id = ?').run(
+        place.lat ?? null,
+        place.lng ?? null,
+        place.radius_m ?? null,
+        address,
+        row.id,
+      );
+    } else {
+      db.prepare('INSERT INTO sites (name, address, lat, lng, radius_m, color, system) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+        def.name,
+        address,
+        place.lat ?? null,
+        place.lng ?? null,
+        place.radius_m ?? null,
+        def.color,
+        key,
+      );
+    }
+  }
 }
 
 export function getSettings(db) {

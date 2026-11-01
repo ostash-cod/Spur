@@ -315,7 +315,7 @@ async function kunden(main) {
       'tr',
       { class: s.archived ? 'inaktiv' : '' },
       h('td', {}, h('span', { class: 'dot', style: `background:${s.color}`, title: s.color })),
-      h('td', {}, h('strong', {}, s.name)),
+      h('td', {}, h('strong', {}, s.name), s.system ? h('span', { class: 'badge', style: 'margin-left:6px' }, 'fester Ort') : null),
       h('td', {}, s.customer_name ?? '–'),
       h('td', {}, s.address ?? ''),
       h('td', {}, s.lat == null ? h('span', { class: 'warn' }, 'Koordinaten fehlen') : `${s.radius_m} m`),
@@ -337,7 +337,7 @@ async function kunden(main) {
           },
         }),
       ),
-      h(
+      s.system ? h('td', { class: 'actions' }, h('a', { href: '#/einstellungen' }, 'Ort in den Einstellungen ändern')) : h(
         'td',
         { class: 'actions' },
         h('button', { class: 'small', onclick: () => siteDialog(s, customers) }, 'Bearbeiten'),
@@ -649,6 +649,90 @@ function trackSvg(points) {
 }
 
 
+
+// --- Zeitbalken (senkrecht): Baustellen in ihrer Farbe, Fahrten gelb mit Transporter ------------
+const PX_PER_MIN = 1.25;
+const MIN_TRAVEL_MS = 2 * 60000;
+
+function vanIcon(size = 26) {
+  return svg(
+    'svg',
+    { viewBox: '0 0 34 20', width: size, height: size * (20 / 34), 'aria-hidden': 'true', style: 'flex:none' },
+    svg('rect', { x: 1, y: 2, width: 19, height: 12, rx: 2, fill: '#4B5159' }),
+    svg('path', { d: 'M20 5h6.2l5.3 4.2V14H20z', fill: '#4B5159' }),
+    svg('path', { d: 'M22 6.8h3.6l3 2.4H22z', fill: '#F5C400' }),
+    svg('circle', { cx: 8, cy: 15.5, r: 3, fill: '#4B5159', stroke: '#F5C400', 'stroke-width': 1.5 }),
+    svg('circle', { cx: 26, cy: 15.5, r: 3, fill: '#4B5159', stroke: '#F5C400', 'stroke-width': 1.5 }),
+  );
+}
+
+function isLight(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150;
+}
+
+// Macht aus den Abschnitten die Blöcke des Tages. Die Zeit dazwischen ist Fahrt.
+function buildBlocks(day, siteById) {
+  const end = day.ended_at ?? Date.now();
+  const segs = [...(day.segments ?? [])]
+    .sort((a, b) => a.started_at - b.started_at)
+    .map((s) => ({ ...s, ended_at: s.ended_at ?? end }));
+  const out = [];
+  let cursor = day.started_at;
+  for (const s of segs) {
+    if (s.started_at - cursor >= MIN_TRAVEL_MS) {
+      out.push({ type: 'travel', label: out.length === 0 ? 'Anfahrt' : 'Fahrt', start: cursor, end: s.started_at });
+    }
+    const start = Math.max(s.started_at, cursor);
+    out.push({ type: 'site', seg: s, site: s.site_id != null ? siteById.get(s.site_id) : null, start, end: Math.max(start, s.ended_at) });
+    cursor = Math.max(cursor, s.ended_at);
+  }
+  if (end - cursor >= MIN_TRAVEL_MS) {
+    out.push({ type: 'travel', label: !segs.length ? 'Unterwegs' : day.ended_at ? 'Heimfahrt' : 'Unterwegs', start: cursor, end });
+  }
+  return out;
+}
+
+function timelineView(day, siteById) {
+  const blocks = buildBlocks(day, siteById);
+  if (!blocks.length) return h('p', { class: 'hint' }, 'Noch keine Zeit gebucht.');
+  const t0 = Math.floor(day.started_at / 3600000) * 3600000;
+  const tEnd = Math.max(...blocks.map((b) => b.end), day.started_at + 3600000);
+  const totalMin = (Math.ceil(tEnd / 3600000) * 3600000 - t0) / 60000;
+  const box = h('div', { class: 'timeline' });
+  for (let m = 0; m <= totalMin; m += 60) {
+    box.append(h('div', { class: 'hour', style: `top:${Math.round(m * PX_PER_MIN)}px` }, h('span', {}, fmtTime(t0 + m * 60000))));
+  }
+  // Kurze Blöcke werden mindestens so hoch gezeichnet, dass man sie lesen kann, und schieben die nächsten ein Stück nach unten.
+  let prevBottom = -Infinity;
+  for (const b of blocks) {
+    const top = Math.max(Math.round(((b.start - t0) / 60000) * PX_PER_MIN), prevBottom + 2);
+    const height = Math.max(20, Math.round(((b.end - b.start) / 60000) * PX_PER_MIN) - 2);
+    prevBottom = top + height;
+    const dur = fmtDuration(b.end - b.start);
+    const times = `${fmtTime(b.start)} bis ${fmtTime(b.end)}`;
+    if (b.type === 'travel') {
+      box.append(
+        h('div', { class: 'block travel', style: `top:${top}px;height:${height}px` }, vanIcon(), h('div', {}, h('strong', {}, `${b.label} · ${dur}`), height >= 44 ? h('div', { class: 'small' }, times) : null)),
+      );
+    } else {
+      const color = b.site?.color ?? '#B8BCC2';
+      const fg = isLight(color) ? '#1B1C1E' : '#FFFFFF';
+      const name = b.site?.name ?? 'Ohne Baustelle';
+      box.append(
+        h(
+          'div',
+          { class: 'block site', style: `top:${top}px;height:${height}px;background:${color};color:${fg}` },
+          h('div', {}, h('strong', {}, `${name} · ${dur}`), height >= 44 ? h('div', { class: 'small' }, `${times}${b.site?.customer_name ? ` · ${b.site.customer_name}` : ''}${b.seg.source === 'auto' ? ' · automatisch' : ''}`) : null),
+        ),
+      );
+    }
+  }
+  box.style.height = `${Math.max(Math.round(totalMin * PX_PER_MIN), prevBottom + 4)}px`;
+  return box;
+}
+
 const KIND_LABEL = { work: 'Arbeit', travel: 'Anfahrt', private: 'Privat', break: 'Pause' };
 const KIND_COLOR = { travel: '#F5C400', private: '#B8BCC2', break: '#B8BCC2' };
 
@@ -702,8 +786,9 @@ async function tagesansicht(main, userId, dateStr) {
           { class: 'card' },
           h('h2', {}, `${fmtTime(d.started_at)} bis ${d.ended_at ? fmtTime(d.ended_at) : 'läuft noch'} · ${fmtDuration(end - d.started_at)}`),
           h('p', { class: 'hint' }, `${d.points.length} GPS-Punkte`),
-          segmentList(d, siteById),
-          trackSvg(d.points),
+          timelineView(d, siteById),
+          h('details', { style: 'margin:10px 0' }, h('summary', {}, 'Abschnitte als Liste'), segmentList(d, siteById)),
+          h('details', {}, h('summary', {}, 'Gefahrener Weg'), trackSvg(d.points)),
         );
       })
     : [h('div', { class: 'card placeholder' }, 'An diesem Tag wurde nichts aufgezeichnet.')];
@@ -748,13 +833,38 @@ async function einstellungen(main) {
     address: h('input', { id: 'c-addr', value: s.company.address }),
   };
 
-  const placeCard = (title, key, hint) =>
+  const findFirma = h(
+    'button',
+    {
+      type: 'button',
+      class: 'small',
+      onclick: async () => {
+        status.className = 'hint';
+        status.textContent = 'Sucht …';
+        try {
+          const hits = await api(`/geocode?q=${encodeURIComponent(f.address.value)}`);
+          if (!hits.length) throw new Error('Zu dieser Adresse wurde nichts gefunden. Trage die Koordinaten von Hand ein.');
+          $('firma-lat').value = showNum(Number(hits[0].lat.toFixed(6)));
+          $('firma-lng').value = showNum(Number(hits[0].lng.toFixed(6)));
+          status.className = 'hint ok';
+          status.textContent = `Gefunden: ${hits[0].label}. Bitte prüfen und unten speichern.`;
+        } catch (ex) {
+          status.className = 'error';
+          status.textContent = ex.message;
+        }
+      },
+    },
+    'Position aus der Firmenadresse suchen',
+  );
+
+  const placeCard = (title, key, hint, extra = null) =>
     h(
       'div',
       { class: 'card' },
       h('h2', {}, title),
       h('div', { class: 'row' }, field('Breite (lat)', `${key}-lat`, showNum(s[key].lat)), field('Länge (lng)', `${key}-lng`, showNum(s[key].lng)), field('Radius in Metern', `${key}-r`, showNum(s[key].radius_m))),
       h('p', { class: 'hint' }, hint),
+      extra,
     );
 
   const form = h(
@@ -788,7 +898,7 @@ async function einstellungen(main) {
       },
     },
     h('div', { class: 'card' }, h('h2', {}, 'Firma'), h('label', { for: 'c-name' }, 'Name'), f.name, h('label', { for: 'c-addr' }, 'Adresse'), f.address),
-    placeCard('Firma (Keltenstraße 31) – Standort', 'firma', 'Hier gilt als Start der Anfahrt zu den Kunden. Koordinaten noch leer: später am Handy vor Ort übernehmen oder aus Google Maps kopieren.'),
+    placeCard('Firma (Keltenstraße 31) – Standort', 'firma', 'Hier gilt als Start der Anfahrt zu den Kunden. Die App erkennt die Firma als festen Ort, wenn die Position eingetragen ist.', findFirma),
     placeCard('Lager Pöcking – Standort', 'lager', 'Koordinaten wie in Google Maps (mit Punkt oder Komma).'),
     h(
       'div',

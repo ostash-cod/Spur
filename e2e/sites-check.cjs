@@ -23,7 +23,7 @@ let srv;
   await page.fill('#code', code); await page.click('#login-form button');
   await page.waitForSelector('table');
   await page.click('a[data-page=kunden]');
-  await page.waitForSelector('text=Noch keine Baustelle angelegt');
+  await page.waitForSelector('td strong:has-text("Lager")');
 
   // Kunde anlegen
   await page.click('button:has-text("Neuer Kunde")');

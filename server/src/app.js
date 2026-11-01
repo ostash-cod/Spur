@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { registerSiteRoutes } from './sites.js';
-import { getSettings, setSetting, DEFAULT_SETTINGS } from './db.js';
+import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
 import {
   candidateHashes,
   createUser,
@@ -227,6 +227,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl } = {}
       return reply.code(400).send({ error: err.message });
     }
     for (const [key, value] of Object.entries(clean)) setSetting(db, key, value);
+    ensureSystemSites(db); // Lager und Firma folgen den Einstellungen
     return getSettings(db);
   });
 

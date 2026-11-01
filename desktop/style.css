@@ -96,3 +96,15 @@ button.danger:hover { background: #fbeceb; }
 /* Fenster oben ausrichten: wenn sich der Inhalt ändert, rutschen die Felder darüber nicht weg. */
 dialog[open] { margin: 4vh auto auto; }
 #s-found { min-height: 1.6em; }
+
+/* Zeitbalken */
+.timeline { position: relative; margin: 10px 0 14px 54px; max-width: 560px; border-left: 2px solid var(--linie); }
+.timeline .hour { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--linie); }
+.timeline .hour span { position: absolute; left: -54px; top: -9px; width: 44px; text-align: right; font-size: 0.78rem; color: var(--text-leise); }
+.timeline .block { position: absolute; left: 6px; right: 0; border-radius: 8px; padding: 3px 10px; box-sizing: border-box; overflow: hidden; display: flex; align-items: center; gap: 10px; line-height: 1.25; }
+.timeline .block.travel { background: #F5C400; color: #1B1C1E; }
+.timeline .block.site { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+.timeline .block .small { font-size: 0.8rem; opacity: 0.9; }
+details summary { cursor: pointer; color: var(--text-leise); padding: 4px 0; }
+.timeline .block { line-height: 1.1; padding-top: 1px; padding-bottom: 1px; }
+.timeline .block strong { font-size: 0.92rem; }

@@ -64,13 +64,14 @@ test('Baustellen: Mitarbeiter sehen nur aktive, Chef sieht alle, Änderungen gel
   assert.equal(s1.radius_custom, true);
 
   await call('PATCH', `/api/sites/${s2.id}`, at, { active: false });
-  const forWorker = (await call('GET', '/api/sites', wt)).json();
+  const own = (r) => r.json().filter((s) => !s.system); // Lager und Firma gibt es immer
+  const forWorker = own(await call('GET', '/api/sites', wt));
   assert.deepEqual(forWorker.map((s) => s.name), ['Lilienstraße 77']);
-  const forAdmin = (await call('GET', '/api/sites?all=1', at)).json();
+  const forAdmin = own(await call('GET', '/api/sites?all=1', at));
   assert.equal(forAdmin.length, 2);
 
   await call('PATCH', `/api/sites/${s1.id}`, at, { archived: true });
-  assert.equal((await call('GET', '/api/sites', wt)).json().length, 0);
+  assert.equal(own(await call('GET', '/api/sites', wt)).length, 0);
 
   assert.equal((await call('POST', '/api/sites', wt, { name: 'Neu' })).statusCode, 403, 'nur der Chef legt Baustellen an');
   assert.equal((await call('PATCH', `/api/sites/${s1.id}`, wt, { name: 'x' })).statusCode, 403);
@@ -176,4 +177,38 @@ test('Bestehende Datenbank ohne Kundenadresse wird beim Start ergänzt', async (
   assert.ok(cols.includes('address'));
   assert.equal(db.prepare('SELECT name FROM customers').get().name, 'Alt', 'alte Daten bleiben erhalten');
   openDb(path); // zweiter Start geht ohne Fehler
+});
+
+// --- Lager und Firma als feste Orte --------------------------------------------
+test('Lager und Firma: feste Orte aus den Einstellungen, geschützt, folgen Änderungen', async () => {
+  const { call, at, wt } = await setup();
+  const list = (await call('GET', '/api/sites?all=1', at)).json();
+  const lager = list.find((s) => s.system === 'lager');
+  const firma = list.find((s) => s.system === 'firma');
+  assert.equal(lager.name, 'Lager');
+  assert.equal(lager.lat, 47.96137940326983, 'Lager-Position aus den Einstellungen');
+  assert.equal(firma.lat, null, 'Firma hat noch keine Position');
+  assert.ok(lager.color && firma.color && lager.color !== firma.color);
+
+  // Mitarbeiter bekommen beide (für Kacheln und Erkennung)
+  const forWorker = (await call('GET', '/api/sites', wt)).json();
+  assert.ok(forWorker.some((s) => s.system === 'lager') && forWorker.some((s) => s.system === 'firma'));
+
+  // Schutz
+  assert.equal((await call('PATCH', `/api/sites/${lager.id}`, at, { name: 'Anderer Name' })).statusCode, 400);
+  assert.equal((await call('PATCH', `/api/sites/${lager.id}`, at, { archived: true })).statusCode, 400);
+  assert.equal((await call('PATCH', `/api/sites/${lager.id}`, at, { color: '#112233' })).statusCode, 200);
+  assert.equal((await call('PATCH', `/api/sites/${lager.id}`, at, { active: false })).statusCode, 200);
+  const del = await call('DELETE', `/api/sites/${lager.id}`, at);
+  assert.equal(del.statusCode, 409);
+  assert.match(del.json().error, /feste Orte/);
+
+  // Einstellungen ändern die Orte mit
+  await call('PUT', '/api/settings', at, { firma: { lat: 47.97, lng: 11.31, radius_m: 80 }, lager: { lat: 47.9, lng: 11.2, radius_m: 120 } });
+  const after = (await call('GET', '/api/sites?all=1', at)).json();
+  const firma2 = after.find((s) => s.system === 'firma');
+  assert.equal(firma2.lat, 47.97);
+  assert.equal(firma2.radius_m, 80);
+  assert.equal(after.find((s) => s.system === 'lager').radius_m, 120);
+  assert.equal(after.filter((s) => s.system).length, 2, 'keine doppelten Systemorte');
 });

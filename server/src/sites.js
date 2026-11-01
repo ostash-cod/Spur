@@ -48,6 +48,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     color: r.color,
     active: !!r.active,
     archived: !!r.archived,
+    system: r.system ?? null,
   });
 
   const SITE_SELECT = `SELECT s.*, c.name AS customer_name FROM sites s LEFT JOIN customers c ON c.id = s.customer_id`;
@@ -118,7 +119,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     const radius = getSettings(db).site_radius_m;
     const all = req.user.role === 'admin' && req.query.all === '1';
     const rows = db
-      .prepare(`${SITE_SELECT} ${all ? '' : 'WHERE s.archived = 0 AND s.active = 1'} ORDER BY s.archived, s.name COLLATE NOCASE`)
+      .prepare(`${SITE_SELECT} ${all ? '' : 'WHERE s.archived = 0 AND s.active = 1'} ORDER BY s.archived, (s.system IS NOT NULL), s.name COLLATE NOCASE`)
       .all();
     return rows.map((r) => siteRow(r, radius));
   });
@@ -158,6 +159,9 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     const row = db.prepare('SELECT * FROM sites WHERE id = ?').get(id);
     if (!row) return reply.code(404).send({ error: 'Baustelle nicht gefunden' });
     const b = req.body ?? {};
+    if (row.system && Object.keys(b).some((k) => !['active', 'color'].includes(k))) {
+      return reply.code(400).send({ error: 'Lager und Firma werden in den Einstellungen verwaltet. Hier kannst du nur Farbe und „aktiv“ ändern.' });
+    }
     const name = b.name === undefined ? row.name : text(b.name);
     if (!name) return reply.code(400).send({ error: 'Name fehlt' });
     const placeErr = checkPlace(b);
@@ -192,6 +196,9 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     const id = Number(req.params.id);
     if (!db.prepare('SELECT 1 FROM sites WHERE id = ?').get(id)) {
       return reply.code(404).send({ error: 'Baustelle nicht gefunden' });
+    }
+    if (db.prepare('SELECT 1 FROM sites WHERE id = ? AND system IS NOT NULL').get(id)) {
+      return reply.code(409).send({ error: 'Lager und Firma sind feste Orte und können nicht gelöscht werden.' });
     }
     if (db.prepare('SELECT 1 FROM segments WHERE site_id = ?').get(id)) {
       return reply.code(409).send({ error: 'Für diese Baustelle sind schon Zeiten gebucht. Bitte archiviere sie stattdessen, sonst gehen Stunden verloren.' });
