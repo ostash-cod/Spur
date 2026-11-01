@@ -79,3 +79,14 @@ a { color: #1b1c1e; text-decoration-color: var(--gelb-dunkel); text-underline-of
 a:hover { background: rgba(245, 196, 0, 0.35); }
 .menu a, .menu a:hover { text-decoration: none; }
 .track { width: 100%; max-width: 640px; height: auto; display: block; margin-top: 8px; }
+
+.dot { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--linie); vertical-align: middle; }
+.warn { color: #9a6b00; font-weight: 600; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.swatch { width: 34px; height: 34px; padding: 0; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--linie); }
+.swatch.on { box-shadow: 0 0 0 3px var(--anthrazit); }
+.swatch.auto { width: auto; border-radius: 17px; padding: 0 12px; background: #fff; font-size: 0.85rem; }
+.swatch.auto.on { background: var(--gelb); }
+button.result { display: block; width: 100%; text-align: left; margin-top: 6px; white-space: normal; }
+dialog { max-height: 90vh; overflow: auto; }
+dialog[open] { width: min(94vw, 560px); }

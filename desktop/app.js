@@ -134,7 +134,6 @@ function placeholder(title, text, step) {
     return Promise.resolve();
   };
 }
-const kunden = placeholder('Kunden und Projekte', 'Kontakte, Projekte, Farben und Stundensätze.', 'Schritt 3');
 const berichte = placeholder('Berichte', 'Kundenbericht, Wochennachweis, Lohnbericht und Kilometerblatt.', 'Schritt 5');
 const statistik = placeholder('Statistik', 'Stunden und Umsatz pro Monat, Kunde und Projekt.', 'Schritt 7');
 
@@ -290,6 +289,277 @@ function showCode(name, code, reload) {
   d.addEventListener('close', () => reload && route(), { once: true });
 }
 
+
+
+// --- Kunden und Baustellen -------------------------------------------------
+const SITE_COLORS = ['#2E9E4F', '#7E57C2', '#1E88E5', '#FB8C00', '#00897B', '#D81B60', '#8D6E63', '#3949AB', '#7CB342', '#00ACC1'];
+
+async function kunden(main) {
+  const [sites, customers] = await Promise.all([api('/sites?all=1'), api('/customers')]);
+  const showArchived = sessionStorageGet('show-archived') === '1';
+  const visibleSites = sites.filter((s) => showArchived || !s.archived);
+  const visibleCustomers = customers.filter((c) => showArchived || !c.archived);
+
+  const siteRows = visibleSites.map((s) =>
+    h(
+      'tr',
+      { class: s.archived ? 'inaktiv' : '' },
+      h('td', {}, h('span', { class: 'dot', style: `background:${s.color}`, title: s.color })),
+      h('td', {}, h('strong', {}, s.name)),
+      h('td', {}, s.customer_name ?? '–'),
+      h('td', {}, s.address ?? ''),
+      h('td', {}, s.lat == null ? h('span', { class: 'warn' }, 'Koordinaten fehlen') : `${s.radius_m} m`),
+      h(
+        'td',
+        {},
+        h('input', {
+          type: 'checkbox',
+          'aria-label': `${s.name} aktiv`,
+          checked: s.active && !s.archived,
+          disabled: s.archived,
+          onchange: async (e) => {
+            try {
+              await api(`/sites/${s.id}`, { method: 'PATCH', body: { active: e.target.checked } });
+            } catch (err) {
+              e.target.checked = !e.target.checked;
+              alert(err.message);
+            }
+          },
+        }),
+      ),
+      h(
+        'td',
+        { class: 'actions' },
+        h('button', { class: 'small', onclick: () => siteDialog(s, customers) }, 'Bearbeiten'),
+        h(
+          'button',
+          {
+            class: 'small',
+            onclick: async () => {
+              await api(`/sites/${s.id}`, { method: 'PATCH', body: { archived: !s.archived } });
+              route();
+            },
+          },
+          s.archived ? 'Wiederherstellen' : 'Archivieren',
+        ),
+      ),
+    ),
+  );
+
+  const customerRows = visibleCustomers.map((c) =>
+    h(
+      'tr',
+      { class: c.archived ? 'inaktiv' : '' },
+      h('td', {}, h('strong', {}, c.name)),
+      h('td', {}, c.email ?? ''),
+      h('td', {}, c.hourly_rate == null ? '–' : `${showNum(c.hourly_rate)} €/h`),
+      h(
+        'td',
+        { class: 'actions' },
+        h('button', { class: 'small', onclick: () => customerDialog(c) }, 'Bearbeiten'),
+        h(
+          'button',
+          {
+            class: 'small',
+            onclick: async () => {
+              await api(`/customers/${c.id}`, { method: 'PATCH', body: { archived: !c.archived } });
+              route();
+            },
+          },
+          c.archived ? 'Wiederherstellen' : 'Archivieren',
+        ),
+      ),
+    ),
+  );
+
+  main.replaceChildren(
+    h('h1', {}, 'Kunden und Projekte'),
+    h('p', { class: 'sub' }, 'Baustellen mit Adresse und Farbe. Aktive Baustellen erscheinen in der Handy-App als Kacheln und werden dort automatisch erkannt.'),
+    h(
+      'div',
+      { class: 'card' },
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Baustellen'), h('button', { class: 'primary', onclick: () => siteDialog(null, customers) }, 'Neue Baustelle')),
+      siteRows.length
+        ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Baustelle'), h('th', {}, 'Kunde'), h('th', {}, 'Adresse'), h('th', {}, 'Erkennung'), h('th', {}, 'Aktiv'), h('th', {}, ''))), h('tbody', {}, siteRows))
+        : h('p', { class: 'hint' }, 'Noch keine Baustelle angelegt.'),
+    ),
+    h(
+      'div',
+      { class: 'card' },
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Kunden'), h('button', { onclick: () => customerDialog(null) }, 'Neuer Kunde')),
+      customerRows.length
+        ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Kunde'), h('th', {}, 'E-Mail'), h('th', {}, 'Stundensatz'), h('th', {}, ''))), h('tbody', {}, customerRows))
+        : h('p', { class: 'hint' }, 'Noch kein Kunde angelegt. Ein Kunde ist optional, eine Baustelle geht auch ohne.'),
+    ),
+    h(
+      'label',
+      { class: 'check', style: 'margin-top:0' },
+      h('input', {
+        type: 'checkbox',
+        checked: showArchived,
+        onchange: (e) => {
+          sessionStorageSet('show-archived', e.target.checked ? '1' : '0');
+          route();
+        },
+      }),
+      'Archivierte anzeigen',
+    ),
+  );
+}
+
+function sessionStorageGet(k) {
+  try { return sessionStorage.getItem(k); } catch { return null; }
+}
+function sessionStorageSet(k, v) {
+  try { sessionStorage.setItem(k, v); } catch { /* ohne Speicher geht es auch */ }
+}
+
+function siteDialog(site, customers) {
+  const s = site ?? {};
+  const name = h('input', { id: 's-name', value: s.name ?? '', placeholder: 'zum Beispiel Lilienstraße 77', style: 'max-width:none' });
+  const cust = h(
+    'select',
+    { id: 's-cust', style: 'max-width:none' },
+    h('option', { value: '' }, '– kein Kunde –'),
+    customers.filter((c) => !c.archived || c.id === s.customer_id).map((c) => h('option', { value: c.id, selected: c.id === s.customer_id }, c.name)),
+  );
+  const addr = h('input', { id: 's-addr', value: s.address ?? '', placeholder: 'Straße Nr, PLZ Ort', style: 'max-width:none' });
+  const lat = h('input', { id: 's-lat', value: showNum(s.lat), inputmode: 'decimal', placeholder: '48,12345' });
+  const lng = h('input', { id: 's-lng', value: showNum(s.lng), inputmode: 'decimal', placeholder: '11,60123' });
+  const rad = h('input', { id: 's-rad', value: s.radius_custom ? showNum(s.radius_m) : '', inputmode: 'decimal', placeholder: 'Standard' });
+  const results = h('div', { style: 'margin-top:8px' });
+  const err = h('p', { class: 'error' });
+  let color = s.color ?? null;
+
+  const swatchBox = h('div', { class: 'swatches' });
+  const drawSwatches = () => {
+    swatchBox.replaceChildren(
+      ...(site ? [] : [h('button', { type: 'button', class: `swatch auto${color == null ? ' on' : ''}`, onclick: () => { color = null; drawSwatches(); } }, 'Automatisch')]),
+      ...SITE_COLORS.map((c) =>
+        h('button', { type: 'button', class: `swatch${color && color.toUpperCase() === c ? ' on' : ''}`, style: `background:${c}`, 'aria-label': `Farbe ${c}`, onclick: () => { color = c; drawSwatches(); } }),
+      ),
+    );
+  };
+  drawSwatches();
+
+  const search = h(
+    'button',
+    {
+      type: 'button',
+      onclick: async () => {
+        err.textContent = '';
+        results.replaceChildren(h('p', { class: 'hint' }, 'Sucht …'));
+        try {
+          const found = await api(`/geocode?q=${encodeURIComponent(addr.value)}`);
+          results.replaceChildren(
+            found.length
+              ? h('div', {}, h('p', { class: 'hint' }, 'Treffer anklicken:'), ...found.map((f) => h('button', { type: 'button', class: 'small result', onclick: () => { lat.value = showNum(Number(f.lat.toFixed(6))); lng.value = showNum(Number(f.lng.toFixed(6))); results.replaceChildren(h('p', { class: 'hint ok' }, `Übernommen: ${f.label}`)); } }, f.label)))
+              : h('p', { class: 'hint' }, 'Nichts gefunden. Trage die Koordinaten von Hand ein (in Google Maps mit der rechten Maustaste auf den Ort klicken).'),
+          );
+        } catch (ex) {
+          results.replaceChildren();
+          err.textContent = ex.message;
+        }
+      },
+    },
+    'Koordinaten suchen',
+  );
+
+  const d = openDialog(
+    h('h2', {}, site ? 'Baustelle bearbeiten' : 'Neue Baustelle'),
+    h('label', { for: 's-name' }, 'Name der Baustelle'),
+    name,
+    h('label', { for: 's-cust' }, 'Kunde (optional)'),
+    cust,
+    h('label', { for: 's-addr' }, 'Adresse'),
+    addr,
+    h('div', { style: 'margin-top:8px' }, search),
+    results,
+    h('div', { class: 'row' }, h('div', {}, h('label', { for: 's-lat' }, 'Breite'), lat), h('div', {}, h('label', { for: 's-lng' }, 'Länge'), lng), h('div', {}, h('label', { for: 's-rad' }, 'Radius (m)'), rad)),
+    h('p', { class: 'hint' }, 'Mit den Koordinaten erkennt die App die Ankunft. Der Radius ist optional, ohne Eintrag gilt der Standard aus den Einstellungen.'),
+    h('label', {}, 'Farbe'),
+    swatchBox,
+    err,
+    h(
+      'div',
+      { class: 'actions', style: 'margin-top:14px' },
+      h(
+        'button',
+        {
+          class: 'primary',
+          onclick: async () => {
+            err.textContent = '';
+            const la = num(lat.value);
+            const ln = num(lng.value);
+            const r = num(rad.value);
+            if (Number.isNaN(la) || Number.isNaN(ln) || Number.isNaN(r)) return (err.textContent = 'Koordinaten und Radius müssen Zahlen sein.');
+            if ((la === null) !== (ln === null)) return (err.textContent = 'Breite und Länge nur zusammen eintragen.');
+            const body = {
+              name: name.value,
+              customer_id: cust.value ? Number(cust.value) : null,
+              address: addr.value,
+              lat: la,
+              lng: ln,
+              radius_m: r,
+            };
+            if (color) body.color = color;
+            try {
+              await api(site ? `/sites/${site.id}` : '/sites', { method: site ? 'PATCH' : 'POST', body });
+              d.close();
+              route();
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
+          },
+        },
+        'Speichern',
+      ),
+      h('button', { onclick: () => d.close() }, 'Abbrechen'),
+    ),
+  );
+  name.focus();
+}
+
+function customerDialog(c) {
+  const name = h('input', { id: 'c-name2', value: c?.name ?? '', style: 'max-width:none' });
+  const email = h('input', { id: 'c-mail', value: c?.email ?? '', type: 'email', style: 'max-width:none' });
+  const rate = h('input', { id: 'c-rate', value: showNum(c?.hourly_rate), inputmode: 'decimal', placeholder: 'zum Beispiel 55' });
+  const err = h('p', { class: 'error' });
+  const d = openDialog(
+    h('h2', {}, c ? 'Kunde bearbeiten' : 'Neuer Kunde'),
+    h('label', { for: 'c-name2' }, 'Name'),
+    name,
+    h('label', { for: 'c-mail' }, 'E-Mail (für den Versand der Stundennachweise)'),
+    email,
+    h('label', { for: 'c-rate' }, 'Stundensatz in Euro'),
+    rate,
+    err,
+    h(
+      'div',
+      { class: 'actions', style: 'margin-top:14px' },
+      h(
+        'button',
+        {
+          class: 'primary',
+          onclick: async () => {
+            const r = num(rate.value);
+            if (Number.isNaN(r)) return (err.textContent = 'Der Stundensatz muss eine Zahl sein.');
+            try {
+              await api(c ? `/customers/${c.id}` : '/customers', { method: c ? 'PATCH' : 'POST', body: { name: name.value, email: email.value, hourly_rate: r } });
+              d.close();
+              route();
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
+          },
+        },
+        'Speichern',
+      ),
+      h('button', { onclick: () => d.close() }, 'Abbrechen'),
+    ),
+  );
+  name.focus();
+}
 
 // --- Tagesansicht ----------------------------------------------------------
 const SVG_NS = 'http://www.w3.org/2000/svg';

@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
+import { registerSiteRoutes } from './sites.js';
 import { getSettings, setSetting, DEFAULT_SETTINGS } from './db.js';
 import {
   candidateHashes,
@@ -64,7 +65,7 @@ function positiveNumber(label) {
   };
 }
 
-export async function buildApp({ db, staticDir, logger = false } = {}) {
+export async function buildApp({ db, staticDir, logger = false, fetchImpl } = {}) {
   // Hinter dem Webserver (Caddy) kommt die echte Adresse des Handys im Kopf der Anfrage.
   const app = Fastify({ logger, trustProxy: process.env.SPUR_TRUST_PROXY === '1' });
   const failedLogins = new Map(); // ip -> [Zeitstempel]
@@ -293,6 +294,8 @@ export async function buildApp({ db, staticDir, logger = false } = {}) {
     const pointStmt = db.prepare('SELECT ts, lat, lng, acc FROM points WHERE day_id = ? ORDER BY ts');
     return days.map((d) => ({ ...d, points: pointStmt.all(d.id) }));
   });
+
+  registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });
 
   app.get('/api/health', async () => ({ ok: true }));
 
