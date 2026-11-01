@@ -38,6 +38,7 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                                 lat = if (o.isNull("lat")) null else o.getDouble("lat"),
                                 lng = if (o.isNull("lng")) null else o.getDouble("lng"),
                                 radius = o.optDouble("radius_m", 100.0),
+                                system = if (o.isNull("system")) null else o.getString("system"),
                             ),
                         )
                     }

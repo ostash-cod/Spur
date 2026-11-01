@@ -70,6 +70,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -216,6 +217,13 @@ fun MainScreen() {
     val segment = remember(now) { day?.let { db.openSegment(it.id) } }
     val sites = remember(now / 3000) { db.sites() }
     val currentSite = sites.find { it.id == segment?.siteId }
+    val latestDay = remember(now / 5000) { db.latestDay() }
+    val siteMap = remember(sites) { sites.associateBy { it.id } }
+    val timeline = remember(now / 5000, sites) {
+        val d = latestDay
+        val isToday = d != null && Instant.ofEpochMilli(d.startedAt).atZone(ZoneId.systemDefault()).toLocalDate() == LocalDate.now()
+        if (d != null && isToday) buildTimeline(d.startedAt, d.endedAt, now, db.segmentsOfDay(d.id), siteMap) else emptyList()
+    }
 
     // Tag beginnen (falls noch keiner läuft) und, wenn gewünscht, gleich auf einer Baustelle starten.
     fun beginDay(siteId: Long?) {
@@ -312,6 +320,7 @@ fun MainScreen() {
                     onSiteTap = { onSiteTap(it) },
                     isAdmin = Prefs.isAdmin(ctx),
                     onNewSite = { showNewSite = true },
+                    timeline = timeline,
                 )
                 1 -> PlaceholderScreen("Berichte", "Wochen- und Monatsnachweis kommen im nächsten Schritt.")
                 else -> SettingsScreen()
@@ -368,6 +377,7 @@ fun TodayScreen(
     onSiteTap: (SiteRow) -> Unit,
     isAdmin: Boolean,
     onNewSite: () -> Unit,
+    timeline: List<TimelineBlock>,
 ) {
     val ctx = LocalContext.current
     val lastSync = Prefs.lastSync(ctx)
@@ -409,6 +419,10 @@ fun TodayScreen(
         }
         for (site in sites) {
             SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now) { onSiteTap(site) }
+        }
+        if (timeline.isNotEmpty()) {
+            Text("Mein Tag", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            DayTimeline(timeline)
         }
         if (isAdmin) {
             OutlinedButton(onClick = onNewSite, modifier = Modifier.fillMaxWidth().height(52.dp)) {

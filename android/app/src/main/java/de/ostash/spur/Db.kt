@@ -26,6 +26,7 @@ data class SiteRow(
     val lat: Double?,
     val lng: Double?,
     val radius: Double,
+    val system: String?,
 )
 
 data class SegmentRow(
@@ -43,7 +44,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 2) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -78,7 +79,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                 color TEXT NOT NULL,
                 lat REAL,
                 lng REAL,
-                radius REAL NOT NULL)""",
+                radius REAL NOT NULL,
+                system TEXT)""",
         )
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS segments (
@@ -96,6 +98,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createSiteTables(db)
+        if (oldVersion in 2..2) db.execSQL("ALTER TABLE sites ADD COLUMN system TEXT")
     }
 
     private fun day(c: Cursor) = DayRow(
@@ -211,6 +214,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                     if (s.lat != null) put("lat", s.lat) else putNull("lat")
                     if (s.lng != null) put("lng", s.lng) else putNull("lng")
                     put("radius", s.radius)
+                    put("system", s.system)
                 }
                 db.insert("sites", null, cv)
             }
@@ -222,7 +226,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
 
     fun sites(): List<SiteRow> =
         readableDatabase.rawQuery(
-            "SELECT id, name, customer_name, color, lat, lng, radius FROM sites ORDER BY name COLLATE NOCASE",
+            "SELECT id, name, customer_name, color, lat, lng, radius, system FROM sites ORDER BY (system IS NOT NULL), name COLLATE NOCASE",
             null,
         ).use { c ->
             buildList {
@@ -231,6 +235,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                         SiteRow(
                             c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getString(2), c.getString(3),
                             if (c.isNull(4)) null else c.getDouble(4), if (c.isNull(5)) null else c.getDouble(5), c.getDouble(6),
+                            if (c.isNull(7)) null else c.getString(7),
                         ),
                     )
                 }
@@ -304,6 +309,16 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             writableDatabase.execSQL("UPDATE segments SET dirty = 0 WHERE id = ? AND ended_at = ?", arrayOf<Any>(id, endedAtSent))
         }
     }
+
+    fun latestDay(): DayRow? =
+        readableDatabase.rawQuery("SELECT $dayColumns FROM days ORDER BY started_at DESC LIMIT 1", null)
+            .use { if (it.moveToFirst()) day(it) else null }
+
+    fun segmentsOfDay(dayId: Long): List<SegmentRow> =
+        readableDatabase.rawQuery(
+            "SELECT $segmentColumns FROM segments WHERE day_id = ? ORDER BY started_at",
+            arrayOf(dayId.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(segment(c)) } }
 
     fun lastPoint(): PointRow? =
         readableDatabase.rawQuery("SELECT id, ts, lat, lng, acc FROM points ORDER BY ts DESC LIMIT 1", null)
