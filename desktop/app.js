@@ -58,6 +58,51 @@ function num(value) {
 }
 const showNum = (n) => (n == null ? '' : String(n).replace('.', ','));
 
+// Google Maps liefert Koordinaten als ein Text wie „47.96138, 11.30548“. Wird so etwas ins Feld Breite
+// eingefügt, teilen wir es auf Breite und Länge auf.
+function splitPair(text) {
+  const s = String(text ?? '').trim();
+  let m = s.match(/^(-?\d+\.\d+)\s*[,;]\s*(-?\d+\.\d+)$/); // Google-Schreibweise mit Punkten: 47.96, 11.30
+  if (!m) m = s.match(/^(-?\d+,\d+)\s+(-?\d+,\d+)$/); // deutsche Schreibweise mit Leerzeichen: 47,96 11,30
+  if (!m) m = s.match(/^(-?\d+(?:[.,]\d+)?)\s*[;/]\s*(-?\d+(?:[.,]\d+)?)$/);
+  return m ? [m[1].replace('.', ','), m[2].replace('.', ',')] : null;
+}
+const isLink = (v) => /^https?:\/\//i.test(String(v ?? '').trim());
+
+// Holt Breite und Länge aus einem Google-Maps-Link (der Server öffnet den Link).
+async function fillFromLink(url, latEl, lngEl, say) {
+  say?.('Liest die Position aus dem Link …', 'hint');
+  try {
+    const r = await api(`/maplink?url=${encodeURIComponent(url.trim())}`);
+    latEl.value = showNum(Number(r.lat.toFixed(6)));
+    lngEl.value = showNum(Number(r.lng.toFixed(6)));
+    say?.('Position aus dem Link übernommen ✓', 'ok');
+    return true;
+  } catch (ex) {
+    say?.(ex.message, 'error');
+    return false;
+  }
+}
+
+// Ins Feld Breite darf man einfügen: einen Google-Maps-Link, oder „47.96, 11.30“ in einem Stück.
+function watchPair(latEl, lngEl, say) {
+  let last = latEl.value; // Wert vor dem Einfügen, falls der Link nicht funktioniert
+  latEl.addEventListener('input', () => {
+    const v = latEl.value.trim();
+    if (isLink(v)) {
+      latEl.value = last;
+      fillFromLink(v, latEl, lngEl, say).then(() => { last = latEl.value; });
+      return;
+    }
+    const pair = splitPair(v);
+    if (pair) {
+      latEl.value = pair[0];
+      lngEl.value = pair[1];
+    }
+    last = latEl.value;
+  });
+}
+
 function openDialog(...content) {
   const d = $('dialog');
   d.replaceChildren(...content);
@@ -441,9 +486,14 @@ function siteDialog(site, customers) {
   const copyAddr = h('button', { type: 'button', class: 'small', style: 'margin-top:6px', onclick: () => { const c = byId.get(Number(cust.value)); if (c?.address) { addr.value = c.address; searchNow(true); } } }, 'Adresse vom Kunden übernehmen');
   const autoCust = h('input', { type: 'checkbox', id: 's-autocust' });
   const autoCustRow = h('label', { class: 'check' }, autoCust, 'Kunde mit gleichem Namen anlegen');
-  const addr = h('input', { id: 's-addr', value: s.address ?? '', placeholder: 'Straße Nr, PLZ Ort', style: 'max-width:none', oninput: () => scheduleSearch(), onblur: () => searchNow(false) });
+  const addr = h('input', { id: 's-addr', value: s.address ?? '', placeholder: 'Straße Nr, PLZ Ort', style: 'max-width:none', oninput: () => onAddressInput(), onblur: () => searchNow(false) });
   const lat = h('input', { id: 's-lat', value: showNum(s.lat), inputmode: 'decimal', placeholder: '48,12345', oninput: () => { manualCoords = true; } });
   const lng = h('input', { id: 's-lng', value: showNum(s.lng), inputmode: 'decimal', placeholder: '11,60123', oninput: () => { manualCoords = true; } });
+  const say = (msg, kind) => {
+    found.replaceChildren(h('p', { class: kind === 'error' ? 'warn' : kind === 'ok' ? 'hint ok' : 'hint' }, msg));
+    if (kind === 'ok') manualCoords = true; // Die Position aus dem Link wird nicht von der Adresssuche überschrieben.
+  };
+  watchPair(lat, lng, say);
   const rad = h('input', { id: 's-rad', value: s.radius_custom ? showNum(s.radius_m) : '', inputmode: 'decimal', placeholder: 'Standard' });
   const found = h('div', { id: 's-found', style: 'margin-top:6px' });
   const err = h('p', { class: 'error' });
@@ -459,6 +509,18 @@ function siteDialog(site, customers) {
     autoCustRow.style.display = site || cust.value ? 'none' : '';
   }
 
+  let lastAddr = addr.value;
+  function onAddressInput() {
+    const v = addr.value.trim();
+    if (isLink(v)) {
+      addr.value = lastAddr; // der Link selbst gehört nicht ins Adressfeld
+      fillFromLink(v, lat, lng, say);
+      return;
+    }
+    lastAddr = addr.value;
+    scheduleSearch();
+  }
+
   // Sucht die Koordinaten, sobald die Adresse eingegeben ist, und zeigt den Treffer zur Kontrolle.
   function scheduleSearch() {
     clearTimeout(timer);
@@ -467,7 +529,7 @@ function siteDialog(site, customers) {
   async function searchNow(force) {
     clearTimeout(timer);
     const q = addr.value.trim();
-    if (q.length < 6 || (!force && q === lastQuery)) return;
+    if (q.length < 6 || isLink(q) || (!force && q === lastQuery)) return;
     lastQuery = q;
     const mine = ++seq;
     found.replaceChildren(h('p', { class: 'hint' }, 'Sucht die Position …'));
@@ -518,7 +580,7 @@ function siteDialog(site, customers) {
     copyAddr,
     found,
     h('div', { class: 'row' }, h('div', {}, h('label', { for: 's-lat' }, 'Breite'), lat), h('div', {}, h('label', { for: 's-lng' }, 'Länge'), lng), h('div', {}, h('label', { for: 's-rad' }, 'Radius (m)'), rad)),
-    h('p', { class: 'hint' }, 'Die Position wird aus der Adresse automatisch gesucht und kann von Hand geändert werden. Mit ihr erkennt die App die Ankunft. Ohne Radius gilt der Standard aus den Einstellungen.'),
+    h('p', { class: 'hint' }, 'Die Position wird aus der Adresse automatisch gesucht. Du kannst auch einen Google-Maps-Link in das Feld Adresse oder Breite einfügen. Mit der Position erkennt die App die Ankunft. Ohne Radius gilt der Standard aus den Einstellungen.'),
     h('div', {}, h('button', { type: 'button', class: 'small', onclick: () => searchNow(true) }, 'Position erneut suchen')),
     h('label', {}, 'Farbe'),
     swatchBox,
@@ -883,6 +945,19 @@ async function einstellungen(main) {
         status.textContent = 'Speichert …';
         const read = (id) => num($(id).value);
         const place = (key) => ({ lat: read(`${key}-lat`), lng: read(`${key}-lng`), radius_m: read(`${key}-r`) });
+        for (const [key, label] of [['firma', 'Firma'], ['lager', 'Lager']]) {
+          const pl = place(key);
+          if (Number.isNaN(pl.lat) || Number.isNaN(pl.lng) || Number.isNaN(pl.radius_m)) {
+            status.className = 'error';
+            status.textContent = `${label}: Breite, Länge und Radius müssen Zahlen sein, zum Beispiel 47,96138.`;
+            return;
+          }
+          if ((pl.lat === null) !== (pl.lng === null)) {
+            status.className = 'error';
+            status.textContent = `${label}: Breite und Länge nur zusammen eintragen oder beide leer lassen. ${pl.lat === null ? 'Die Breite fehlt.' : 'Die Länge fehlt.'}`;
+            return;
+          }
+        }
         const rules = [...ruleRows.children].map((row) => [num(row.querySelector('.r-h').value), num(row.querySelector('.r-m').value)]);
         const body = {
           company: { name: f.name.value, address: f.address.value },
@@ -927,6 +1002,12 @@ async function einstellungen(main) {
   );
 
   main.replaceChildren(h('h1', {}, 'Einstellungen'), h('p', { class: 'sub' }, 'Firma, Standorte, Pausenregel und Sätze.'), form);
+  const sayStatus = (msg, kind) => {
+    status.className = kind === 'error' ? 'error' : kind === 'ok' ? 'hint ok' : 'hint';
+    status.textContent = msg;
+  };
+  watchPair($('firma-lat'), $('firma-lng'), sayStatus);
+  watchPair($('lager-lat'), $('lager-lng'), sayStatus);
 }
 
 // --- Start -----------------------------------------------------------------

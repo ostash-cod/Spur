@@ -212,3 +212,59 @@ test('Lager und Firma: feste Orte aus den Einstellungen, geschützt, folgen Änd
   assert.equal(after.find((s) => s.system === 'lager').radius_m, 120);
   assert.equal(after.filter((s) => s.system).length, 2, 'keine doppelten Systemorte');
 });
+
+// --- Position aus Google-Maps-Link ---------------------------------------------------
+import { coordsFromText, resolveMapLink } from '../src/sites.js';
+
+const headers = (h) => ({ get: (k) => h[k.toLowerCase()] ?? null });
+
+test('Google-Maps-Adressen: Stecknadel hat Vorrang vor Kartenmitte', () => {
+  assert.deepEqual(coordsFromText('https://www.google.com/maps/place/X/@48.1111,11.2222,17z/data=!3d47.9611!4d11.3055'), { lat: 47.9611, lng: 11.3055 });
+  assert.deepEqual(coordsFromText('https://www.google.com/maps/place/X/@48.1111,11.2222,17z'), { lat: 48.1111, lng: 11.2222 });
+  assert.deepEqual(coordsFromText('https://www.google.com/maps?q=47.9611,11.3055'), { lat: 47.9611, lng: 11.3055 });
+  assert.deepEqual(coordsFromText('https://maps.google.com/?ll=47.9611%2C11.3055&z=15'), { lat: 47.9611, lng: 11.3055 });
+  assert.deepEqual(coordsFromText('https://www.google.com/maps/place/47.9611,-11.3055'), { lat: 47.9611, lng: -11.3055 });
+  assert.equal(coordsFromText('https://www.google.com/maps/@99.5,11.2,5z'), null, 'ungültige Breite');
+  assert.equal(coordsFromText('nichts'), null);
+});
+
+test('Kurzlink wird über die Weiterleitungen aufgelöst, auch über die Einwilligungsseite', async () => {
+  const seen = [];
+  const fake = async (url) => {
+    seen.push(String(url));
+    if (url.startsWith('https://maps.app.goo.gl/')) return { status: 302, headers: headers({ location: 'https://consent.google.com/ml?continue=' + encodeURIComponent('https://www.google.com/maps/place/Zuhause/@47.97,11.31,17z/data=!3d47.9655!4d11.3123') }) };
+    throw new Error('unerwartet: ' + url);
+  };
+  const r = await resolveMapLink('https://maps.app.goo.gl/AbCdEf123', fake);
+  assert.deepEqual(r, { lat: 47.9655, lng: 11.3123 });
+  assert.equal(seen.length, 1, 'nur eine Anfrage nötig');
+
+  const viaHtml = async () => ({ status: 200, headers: headers({}), text: async () => '<html>… "https://www.google.com/maps/@47.5,11.5,15z" …</html>' });
+  assert.deepEqual(await resolveMapLink('https://maps.app.goo.gl/x', viaHtml), { lat: 47.5, lng: 11.5 });
+});
+
+test('Link-Auflösung: nur Google-Hosts, keine Weiterleitung zu fremden Servern, klare Fehler', async () => {
+  const never = async () => { throw new Error('darf nicht aufgerufen werden'); };
+  for (const bad of ['http://maps.app.goo.gl/x', 'https://evil.example.com/maps/@1.1,2.2', 'https://google.com.evil.example/maps', 'kein link']) {
+    await assert.rejects(resolveMapLink(bad, never), (e) => e.status === 400, bad);
+  }
+  const toEvil = async () => ({ status: 302, headers: headers({ location: 'https://evil.example.com/steal' }) });
+  await assert.rejects(resolveMapLink('https://maps.app.goo.gl/x', toEvil), (e) => e.status === 400, 'Weiterleitung auf fremden Host');
+  const empty = async () => ({ status: 200, headers: headers({}), text: async () => '<html>nichts</html>' });
+  await assert.rejects(resolveMapLink('https://maps.app.goo.gl/x', empty), (e) => e.status === 422 && /Teilen/.test(e.message));
+  const loop = async () => ({ status: 302, headers: headers({ location: 'https://maps.app.goo.gl/again' }) });
+  await assert.rejects(resolveMapLink('https://maps.app.goo.gl/x', loop), (e) => e.status === 422, 'Endlosschleife wird abgebrochen');
+});
+
+test('Schnittstelle /api/maplink: nur Chef, liefert Breite und Länge, Fehler verständlich', async () => {
+  const fake = async () => ({ status: 302, headers: headers({ location: 'https://www.google.com/maps/place/Z/@47.9,11.3,17z/data=!3d47.9655!4d11.3123' }) });
+  const { call, at, wt } = await setup(fake);
+  const q = '/api/maplink?url=' + encodeURIComponent('https://maps.app.goo.gl/AbC');
+  assert.equal((await call('GET', q, wt)).statusCode, 403);
+  assert.deepEqual((await call('GET', q, at)).json(), { lat: 47.9655, lng: 11.3123 });
+  assert.equal((await call('GET', '/api/maplink?url=' + encodeURIComponent('https://example.com'), at)).statusCode, 400);
+  const broken = await setup(async () => { throw new Error('offline'); });
+  const e = await broken.call('GET', q, broken.at);
+  assert.equal(e.statusCode, 502);
+  assert.match(e.json().error, /von Hand/);
+});

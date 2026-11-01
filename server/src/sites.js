@@ -34,6 +34,66 @@ function checkPlace(b, partial = false) {
   return null;
 }
 
+
+// --- Position aus einem Google-Maps-Link holen ---------------------------------------------------
+const MAP_HOST_RE = /^(maps\.app\.goo\.gl|goo\.gl|((www|maps|consent)\.)?google\.(com|de|at|ch|fr|it|es|nl|pl|co\.uk))$/i;
+
+// Sucht Breite und Länge in einer Google-Maps-Adresse. Die Stecknadel (!3d…!4d…) hat Vorrang vor der Kartenmitte (@…).
+export function coordsFromText(text) {
+  const s = String(text ?? '');
+  const patterns = [
+    /!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/,
+    /[?&](?:q|ll|query|destination|center)=(?:loc:)?(-?\d{1,2}\.\d+)(?:,|%2C)\s*(-?\d{1,3}\.\d+)/i,
+    /\/place\/(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/,
+    /@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/,
+  ];
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (m) {
+      const lat = Number(m[1]);
+      const lng = Number(m[2]);
+      if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) return { lat, lng };
+    }
+  }
+  return null;
+}
+
+export async function resolveMapLink(rawUrl, fetchImpl = fetch) {
+  let current;
+  try {
+    current = new URL(String(rawUrl).trim());
+  } catch {
+    throw Object.assign(new Error('Das ist kein gültiger Link.'), { status: 400 });
+  }
+  for (let hop = 0; hop < 6; hop++) {
+    if (current.protocol !== 'https:' || !MAP_HOST_RE.test(current.hostname)) {
+      throw Object.assign(new Error('Bitte einen Link von Google Maps einfügen (maps.app.goo.gl oder google.com/maps).'), { status: 400 });
+    }
+    const direct = coordsFromText(current.href);
+    if (direct) return direct;
+    // Die Einwilligungsseite von Google enthält die eigentliche Adresse im Parameter „continue“.
+    if (/^consent\./i.test(current.hostname) && current.searchParams.get('continue')) {
+      current = new URL(current.searchParams.get('continue'));
+      continue;
+    }
+    const res = await fetchImpl(current.href, {
+      redirect: 'manual',
+      headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept-Language': 'de' },
+      signal: AbortSignal.timeout(8000),
+    });
+    const location = res.headers?.get?.('location');
+    if (res.status >= 300 && res.status < 400 && location) {
+      current = new URL(location, current);
+      continue;
+    }
+    const body = typeof res.text === 'function' ? await res.text() : '';
+    const found = coordsFromText(body.slice(0, 400_000));
+    if (found) return found;
+    break;
+  }
+  throw Object.assign(new Error('In diesem Link steht keine Position. Öffne den Ort in Google Maps, wähle „Teilen“ und kopiere den Link, oder trage die Koordinaten von Hand ein.'), { status: 422 });
+}
+
 export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl = fetch }) {
   const siteRow = (r, defaultRadius) => ({
     id: r.id,
@@ -205,6 +265,15 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     }
     db.prepare('DELETE FROM sites WHERE id = ?').run(id);
     return { ok: true };
+  });
+
+  app.get('/api/maplink', { preHandler: requireAdmin }, async (req, reply) => {
+    try {
+      return await resolveMapLink(req.query.url, fetchImpl);
+    } catch (err) {
+      if (err.status) return reply.code(err.status).send({ error: err.message });
+      return reply.code(502).send({ error: 'Der Link konnte nicht geöffnet werden. Du kannst die Koordinaten auch von Hand eintragen.' });
+    }
   });
 
   // --- Koordinaten aus einer Adresse suchen (OpenStreetMap, über den Server) ---
