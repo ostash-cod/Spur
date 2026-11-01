@@ -1,0 +1,248 @@
+import { test, before } from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../src/db.js';
+import { createUser } from '../src/auth.js';
+import { buildApp } from '../src/app.js';
+
+let app, admin, worker;
+let adminToken, workerToken;
+
+async function login(code) {
+  const res = await app.inject({ method: 'POST', url: '/api/login', payload: { code } });
+  return res;
+}
+const auth = (token) => ({ authorization: `Bearer ${token}` });
+
+before(async () => {
+  const db = openDb(':memory:');
+  admin = createUser(db, { name: 'Wladi', language: 'uk', role: 'admin' });
+  worker = createUser(db, { name: 'Mykhaylo', language: 'ru', uses_private_car: 1 });
+  app = await buildApp({ db });
+  adminToken = (await login(admin.code)).json().token;
+  workerToken = (await login(worker.code)).json().token;
+});
+
+test('Anmeldung: richtiger Code, Tippfehler in Schreibweise egal', async () => {
+  const res = await login(worker.code.toLowerCase().replace('-', ' '));
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().user.name, 'Mykhaylo');
+  assert.equal(res.json().user.uses_private_car, true);
+});
+
+test('Anmeldung: falscher Code wird abgelehnt', async () => {
+  const res = await login('AAAA-AAAA');
+  assert.equal(res.statusCode, 401);
+});
+
+test('Ohne Anmeldung kein Zugriff', async () => {
+  assert.equal((await app.inject({ url: '/api/me' })).statusCode, 401);
+  assert.equal((await app.inject({ url: '/api/users' })).statusCode, 401);
+});
+
+test('Mitarbeiter sehen die Mitarbeiterliste nicht', async () => {
+  const res = await app.inject({ url: '/api/users', headers: auth(workerToken) });
+  assert.equal(res.statusCode, 403);
+});
+
+test('Chef legt Mitarbeiter an, Code wird nur einmal gezeigt', async () => {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/users',
+    headers: auth(adminToken),
+    payload: { name: 'Serhii', language: 'uk', uses_private_car: false },
+  });
+  assert.equal(res.statusCode, 201);
+  const { user, code } = res.json();
+  assert.match(code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  assert.equal(user.uses_private_car, false);
+  const list = await app.inject({ url: '/api/users', headers: auth(adminToken) });
+  assert.ok(list.json().every((u) => !('code' in u) && !('code_hash' in u)));
+  assert.equal((await login(code)).statusCode, 200);
+});
+
+test('Ungültige Sprache wird abgelehnt', async () => {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/users',
+    headers: auth(adminToken),
+    payload: { name: 'Test', language: 'xx' },
+  });
+  assert.equal(res.statusCode, 400);
+});
+
+test('Auto-Knopf pro Mitarbeiter ein- und ausschalten', async () => {
+  const res = await app.inject({
+    method: 'PATCH',
+    url: `/api/users/${worker.id}`,
+    headers: auth(adminToken),
+    payload: { uses_private_car: false },
+  });
+  assert.equal(res.json().uses_private_car, false);
+  const me = await app.inject({ url: '/api/me', headers: auth(workerToken) });
+  assert.equal(me.json().uses_private_car, false);
+});
+
+test('Neuer Code macht den alten ungültig und beendet alte Sitzungen', async () => {
+  const oldCode = worker.code;
+  const res = await app.inject({
+    method: 'POST',
+    url: `/api/users/${worker.id}/new-code`,
+    headers: auth(adminToken),
+  });
+  const newCode = res.json().code;
+  assert.notEqual(newCode, oldCode);
+  assert.equal((await login(oldCode)).statusCode, 401);
+  assert.equal((await app.inject({ url: '/api/me', headers: auth(workerToken) })).statusCode, 401);
+  workerToken = (await login(newCode)).json().token;
+});
+
+test('Deaktivierter Mitarbeiter kann sich nicht mehr anmelden', async () => {
+  const created = (
+    await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: auth(adminToken),
+      payload: { name: 'Praktikant' },
+    })
+  ).json();
+  await app.inject({
+    method: 'PATCH',
+    url: `/api/users/${created.user.id}`,
+    headers: auth(adminToken),
+    payload: { active: false },
+  });
+  assert.equal((await login(created.code)).statusCode, 401);
+});
+
+test('Chef kann sich nicht selbst deaktivieren', async () => {
+  const res = await app.inject({
+    method: 'PATCH',
+    url: '/api/users/1',
+    headers: auth(adminToken),
+    payload: { active: false },
+  });
+  assert.equal(res.statusCode, 400);
+});
+
+test('Standard-Einstellungen: Pausenstaffel, 10 Minuten, Lager Pöcking', async () => {
+  const res = await app.inject({ url: '/api/settings', headers: auth(workerToken) });
+  const s = res.json();
+  assert.deepEqual(s.break_rules, [
+    [2.5, 15],
+    [5, 30],
+    [7.5, 45],
+    [10, 60],
+  ]);
+  assert.equal(s.unknown_place_minutes, 10);
+  assert.equal(s.lager.lat, 47.96137940326983);
+  assert.equal(s.lager.lng, 11.30548442373459);
+  assert.equal(s.lager.radius_m, 100);
+  assert.equal(s.km_rate_employee, 0.3);
+  assert.equal(s.km_rate_customer, 0.5);
+});
+
+test('Nur der Chef ändert Einstellungen, und sie werden geprüft', async () => {
+  const forbidden = await app.inject({
+    method: 'PUT',
+    url: '/api/settings',
+    headers: auth(workerToken),
+    payload: { unknown_place_minutes: 5 },
+  });
+  assert.equal(forbidden.statusCode, 403);
+
+  const ok = await app.inject({
+    method: 'PUT',
+    url: '/api/settings',
+    headers: auth(adminToken),
+    payload: {
+      unknown_place_minutes: 5,
+      firma: { lat: 47.96, lng: 11.31, radius_m: 80 },
+      break_rules: [
+        [5, 30],
+        [2.5, 15],
+      ],
+    },
+  });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.json().unknown_place_minutes, 5);
+  assert.equal(ok.json().firma.radius_m, 80);
+  assert.deepEqual(ok.json().break_rules, [
+    [2.5, 15],
+    [5, 30],
+  ]);
+
+  for (const bad of [
+    { unknown_place_minutes: -1 },
+    { lager: { lat: 99, lng: 11, radius_m: 100 } },
+    { lager: { lat: 47, lng: null, radius_m: 100 } },
+    { break_rules: [] },
+    { gibt_es_nicht: 1 },
+  ]) {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      headers: auth(adminToken),
+      payload: bad,
+    });
+    assert.equal(res.statusCode, 400, JSON.stringify(bad));
+  }
+});
+
+test('Zu viele falsche Codes werden gebremst', async () => {
+  let last;
+  for (let i = 0; i < 11; i++) last = await login('ZZZZ-ZZZZ');
+  assert.equal(last.statusCode, 429);
+});
+
+// --- Tage und GPS-Punkte ---------------------------------------------------
+test('Tag anlegen ist wiederholbar und aktualisiert das Ende', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Mitarbeiter' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+  const t0 = Date.UTC(2026, 10, 2, 6, 0, 0);
+
+  const first = await app2.inject({ method: 'POST', url: '/api/days', headers: auth(wt), payload: { client_id: 'abc-12345678', started_at: t0, ended_at: null } });
+  assert.equal(first.statusCode, 200);
+  const again = await app2.inject({ method: 'POST', url: '/api/days', headers: auth(wt), payload: { client_id: 'abc-12345678', started_at: t0, ended_at: t0 + 3_600_000 } });
+  assert.equal(again.json().id, first.json().id);
+
+  const pts = [0, 15, 30].map((s, i) => ({ ts: t0 + s * 1000, lat: 47.96 + i * 0.001, lng: 11.3, acc: 8 }));
+  const add = await app2.inject({ method: 'POST', url: `/api/days/${first.json().id}/points`, headers: auth(wt), payload: { points: pts } });
+  assert.equal(add.json().added, 3);
+  const dup = await app2.inject({ method: 'POST', url: `/api/days/${first.json().id}/points`, headers: auth(wt), payload: { points: pts } });
+  assert.equal(dup.json().added, 0, 'doppelt gesendete Punkte werden nicht doppelt gespeichert');
+
+  const q = `/api/days?user_id=${w.id}&from=${t0 - 1000}&to=${t0 + 86_400_000}`;
+  const list = await app2.inject({ url: q, headers: auth(at) });
+  assert.equal(list.statusCode, 200);
+  assert.equal(list.json().length, 1);
+  assert.equal(list.json()[0].ended_at, t0 + 3_600_000);
+  assert.equal(list.json()[0].points.length, 3);
+
+  assert.equal((await app2.inject({ url: q, headers: auth(wt) })).statusCode, 403, 'Mitarbeiter sehen keine Tagesliste');
+});
+
+test('Punkte nur für eigene Tage und nur gültige Werte', async () => {
+  const db2 = openDb(':memory:');
+  const w1 = createUser(db2, { name: 'Eins' });
+  const w2 = createUser(db2, { name: 'Zwei' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const t1 = await tok(w1.code), t2 = await tok(w2.code);
+  const t0 = Date.UTC(2026, 10, 2, 6, 0, 0);
+  const day = (await app2.inject({ method: 'POST', url: '/api/days', headers: auth(t1), payload: { client_id: 'xyz-12345678', started_at: t0 } })).json();
+
+  const foreign = await app2.inject({ method: 'POST', url: `/api/days/${day.id}/points`, headers: auth(t2), payload: { points: [{ ts: t0, lat: 47, lng: 11 }] } });
+  assert.equal(foreign.statusCode, 404);
+  for (const bad of [[], [{ ts: 5, lat: 47, lng: 11 }], [{ ts: t0, lat: 99, lng: 11 }], [{ ts: t0, lat: 'x', lng: 11 }]]) {
+    const res = await app2.inject({ method: 'POST', url: `/api/days/${day.id}/points`, headers: auth(t1), payload: { points: bad } });
+    assert.equal(res.statusCode, 400, JSON.stringify(bad));
+  }
+  const badDay = await app2.inject({ method: 'POST', url: '/api/days', headers: auth(t1), payload: { client_id: 'kurz', started_at: t0 } });
+  assert.equal(badDay.statusCode, 400);
+  const endBeforeStart = await app2.inject({ method: 'POST', url: '/api/days', headers: auth(t1), payload: { client_id: 'abc-87654321', started_at: t0, ended_at: t0 - 1 } });
+  assert.equal(endBeforeStart.statusCode, 400);
+});

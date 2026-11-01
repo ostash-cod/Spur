@@ -1,0 +1,18 @@
+{
+  "name": "spur-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Spur (von Wladi) – Server und Desktop-Oberfläche",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --no-warnings --test test/api.test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@fastify/static": "^8.3.0",
+    "fastify": "^5.12.7"
+  }
+}

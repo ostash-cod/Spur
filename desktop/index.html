@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spur – von Wladi</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="login-form" class="login-box">
+      <div class="logo">Spur</div>
+      <div class="logo-sub">von Wladi</div>
+      <label for="code">Zugangscode</label>
+      <input id="code" name="code" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX" required>
+      <button type="submit" class="primary">Anmelden</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </div>
+
+  <div id="shell" class="shell hidden">
+    <nav class="menu">
+      <div class="brand"><span class="logo">Spur</span><span class="logo-sub">von Wladi</span></div>
+      <a href="#/mitarbeiter" data-page="mitarbeiter">Mitarbeiter</a>
+      <a href="#/kunden" data-page="kunden">Kunden und Projekte</a>
+      <a href="#/berichte" data-page="berichte">Berichte</a>
+      <a href="#/statistik" data-page="statistik">Statistik</a>
+      <a href="#/einstellungen" data-page="einstellungen">Einstellungen</a>
+      <div class="menu-foot">
+        <span id="me-name"></span>
+        <button id="logout" class="link">Abmelden</button>
+      </div>
+    </nav>
+    <main id="main"></main>
+  </div>
+
+  <dialog id="dialog"></dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
