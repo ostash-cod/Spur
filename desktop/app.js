@@ -620,13 +620,15 @@ function fmtDuration(ms) {
 }
 
 // Zeichnet den Weg als einfache Linie (ohne Kartendienst), Nord ist oben.
-function trackSvg(points) {
+function trackSvg(points, sites = []) {
   const W = 640;
   const H = 340;
   const P = 24;
   if (points.length === 0) return h('p', { class: 'hint' }, 'Keine GPS-Punkte für diesen Tag.');
-  const lats = points.map((p) => p.lat);
-  const lngs = points.map((p) => p.lng);
+  const mPerDeg = 111195;
+  const near = sites.filter((s) => s.lat != null && s.lng != null && points.some((p) => Math.hypot((p.lat - s.lat) * mPerDeg, (p.lng - s.lng) * mPerDeg * Math.cos((s.lat * Math.PI) / 180)) < 1500));
+  const lats = [...points.map((p) => p.lat), ...near.flatMap((s) => [s.lat - s.radius_m / mPerDeg, s.lat + s.radius_m / mPerDeg])];
+  const lngs = [...points.map((p) => p.lng), ...near.flatMap((s) => [s.lng - s.radius_m / mPerDeg, s.lng + s.radius_m / mPerDeg])];
   const minLat = Math.min(...lats), maxLat = Math.max(...lats);
   const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
   const k = Math.cos(((minLat + maxLat) / 2) * (Math.PI / 180));
@@ -636,12 +638,17 @@ function trackSvg(points) {
   const x = (lng) => P + ((lng - minLng) * k - 0) * scale + ((W - 2 * P) - spanX * scale) / 2;
   const y = (lat) => P + (maxLat - lat) * scale + ((H - 2 * P) - spanY * scale) / 2;
   const line = points.map((p) => `${x(p.lng).toFixed(1)},${y(p.lat).toFixed(1)}`).join(' ');
+  const circles = near.flatMap((s) => [
+    svg('circle', { cx: x(s.lng), cy: y(s.lat), r: Math.max(4, (s.radius_m / mPerDeg) * scale), fill: s.color, 'fill-opacity': 0.18, stroke: s.color, 'stroke-width': 2 }),
+    svg('text', { x: x(s.lng), y: y(s.lat) + 4, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 700, fill: '#1b1c1e' }, s.name),
+  ]);
   const first = points[0];
   const last = points[points.length - 1];
   return svg(
     'svg',
     { viewBox: `0 0 ${W} ${H}`, class: 'track', role: 'img', 'aria-label': 'Gefahrener Weg' },
     svg('rect', { width: W, height: H, rx: 10, fill: '#f2f3f4' }),
+    ...circles,
     svg('polyline', { points: line, fill: 'none', stroke: '#2b2d31', 'stroke-width': 3, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }),
     svg('circle', { cx: x(first.lng), cy: y(first.lat), r: 7, fill: '#1f8a3b', stroke: '#fff', 'stroke-width': 2 }),
     svg('circle', { cx: x(last.lng), cy: y(last.lat), r: 7, fill: '#c62828', stroke: '#fff', 'stroke-width': 2 }),
@@ -788,7 +795,7 @@ async function tagesansicht(main, userId, dateStr) {
           h('p', { class: 'hint' }, `${d.points.length} GPS-Punkte`),
           timelineView(d, siteById),
           h('details', { style: 'margin:10px 0' }, h('summary', {}, 'Abschnitte als Liste'), segmentList(d, siteById)),
-          h('details', {}, h('summary', {}, 'Gefahrener Weg'), trackSvg(d.points)),
+          h('details', {}, h('summary', {}, 'Gefahrener Weg mit Baustellen, Lager und Firma (Kreise = Erkennungsradius)'), trackSvg(d.points, sites)),
         );
       })
     : [h('div', { class: 'card placeholder' }, 'An diesem Tag wurde nichts aufgezeichnet.')];
