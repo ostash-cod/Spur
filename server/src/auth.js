@@ -10,7 +10,7 @@ export function generateCode() {
 }
 
 export function normalizeCode(code) {
-  return String(code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return String(code ?? '').toUpperCase().replace(/[^\p{L}\p{N}]/gu, '');
 }
 
 export function hashCode(code) {

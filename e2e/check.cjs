@@ -32,7 +32,7 @@ let srv;
   console.log('Mitarbeiterzeilen:', await page.locator('tbody tr').count());
 
   // Mitarbeiter anlegen
-  await page.fill('#new-name', 'Mykhaylo'); await page.selectOption('#new-lang', 'ru'); await page.check('#new-car');
+  await page.fill('#new-name', 'Mykhaylo'); await page.check('#new-car');
   await page.click('#main form button[type=submit]');
   await page.waitForSelector('dialog[open] .code-box');
   const newCode = await page.textContent('.code-box');
@@ -62,9 +62,21 @@ let srv;
   console.log('Fehlermeldung:', await page.textContent('[role=status]'));
   await page.screenshot({ path: '/tmp/spur-e2e/4-einstellungen.png', fullPage: true });
 
+  // Eigener Code für Mykhaylo (Chef setzt ihn) und Anmeldung damit
+  await page.goto('http://127.0.0.1:3111/#/mitarbeiter'); await page.waitForSelector('table');
+  await page.locator('tbody tr', { hasText: 'Mykhaylo' }).locator('button:has-text("Eigenen Code")').click();
+  await page.fill('#own-code', 'zu kurz'); await page.click('dialog button.primary');
+  await page.waitForFunction(() => document.querySelector('dialog .error').textContent.length > 0);
+  console.log('Kurzer Code ->', await page.textContent('dialog .error'));
+  await page.fill('#own-code', 'Putz Estrich Dämmung 77'); await page.click('dialog button.primary');
+  await page.waitForSelector('dialog .code-box');
+  console.log('Code gezeigt:', (await page.textContent('dialog .code-box')).trim());
+  await page.screenshot({ path: '/tmp/spur-e2e/5-eigener-code.png' });
+  await page.click('dialog button.primary');
+
   // Mitarbeiter-Code darf nicht in die Desktop-Ansicht
   await page.click('#logout'); await page.waitForSelector('#login:not(.hidden)');
-  await page.fill('#code', newCode); await page.click('#login-form button');
+  await page.fill('#code', 'putz estrich dämmung 77'); await page.click('#login-form button');
   await page.waitForFunction(() => document.getElementById('login-error').textContent.length > 0);
   console.log('Mitarbeiter am Desktop ->', await page.textContent('#login-error'));
 

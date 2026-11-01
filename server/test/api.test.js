@@ -246,3 +246,34 @@ test('Punkte nur für eigene Tage und nur gültige Werte', async () => {
   const endBeforeStart = await app2.inject({ method: 'POST', url: '/api/days', headers: auth(t1), payload: { client_id: 'abc-87654321', started_at: t0, ended_at: t0 - 1 } });
   assert.equal(endBeforeStart.statusCode, 400);
 });
+
+// --- Eigener Zugangscode ---------------------------------------------------
+test('Eigener Code: Regeln, Umlaute, Doppelte, Sitzungen', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Mitarbeiter' });
+  const app2 = await buildApp({ db: db2 });
+  const login2 = async (c) => app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } });
+  const at = (await login2(a.code)).json().token;
+  const wt = (await login2(w.code)).json().token;
+  const put = (id, code, token = at) => app2.inject({ method: 'PUT', url: `/api/users/${id}/code`, headers: auth(token), payload: { code } });
+
+  assert.equal((await put(a.id, 'zu kurz')).statusCode, 400);
+  assert.equal((await put(a.id, 'aaaaaaaaaaaaaaa')).statusCode, 400, 'nur ein Zeichen wiederholt ist zu einfach');
+  assert.equal((await put(w.id, 'Fliesen Bad Küche 2026', wt)).statusCode, 403, 'Mitarbeiter dürfen keinen Code setzen');
+
+  const mine = 'Fliesen Bad Küche 2026';
+  assert.equal((await put(a.id, mine)).statusCode, 200);
+  assert.equal((await app2.inject({ url: '/api/me', headers: auth(at) })).statusCode, 200, 'Chef bleibt angemeldet');
+  assert.equal((await login2(a.code)).statusCode, 401, 'der alte Code gilt nicht mehr');
+  for (const variant of [mine, mine.toUpperCase(), 'fliesen-bad-küche-2026', '  Fliesen   Bad Küche 2026 ']) {
+    assert.equal((await login2(variant)).statusCode, 200, `Schreibweise egal: ${variant}`);
+  }
+  assert.equal((await put(w.id, mine)).statusCode, 409, 'derselbe Code für zwei Personen geht nicht');
+
+  const workerCode = 'Putz Estrich Dämmung 77';
+  assert.equal((await put(w.id, workerCode)).statusCode, 200);
+  assert.equal((await app2.inject({ url: '/api/me', headers: auth(wt) })).statusCode, 401, 'alte Anmeldung des Mitarbeiters endet');
+  assert.equal((await login2(workerCode)).statusCode, 200);
+  assert.equal((await put(999, mine)).statusCode, 404);
+});

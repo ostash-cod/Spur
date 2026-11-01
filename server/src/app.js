@@ -4,6 +4,7 @@ import { getSettings, setSetting, DEFAULT_SETTINGS } from './db.js';
 import {
   createUser,
   hashCode,
+  normalizeCode,
   hashToken,
   newToken,
   publicUser,
@@ -182,6 +183,30 @@ export async function buildApp({ db, staticDir, logger = false } = {}) {
       return reply.code(404).send({ error: 'Mitarbeiter nicht gefunden' });
     }
     return { code: rotateCode(db, id) };
+  });
+
+  // Chef legt für sich oder einen Mitarbeiter einen eigenen Code fest (mindestens 12 Zeichen).
+  app.put('/api/users/:id/code', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(id)) {
+      return reply.code(404).send({ error: 'Mitarbeiter nicht gefunden' });
+    }
+    const raw = req.body?.code;
+    const norm = normalizeCode(raw);
+    if (norm.length < 12) {
+      return reply.code(400).send({ error: 'Der Code braucht mindestens 12 Buchstaben oder Zahlen (Leerzeichen und Striche zählen nicht).' });
+    }
+    if (norm.length > 64) return reply.code(400).send({ error: 'Der Code ist zu lang (höchstens 64 Zeichen).' });
+    if (/^(.)\1+$/u.test(norm)) return reply.code(400).send({ error: 'Der Code ist zu einfach.' });
+    try {
+      db.prepare('UPDATE users SET code_hash = ? WHERE id = ?').run(hashCode(raw), id);
+    } catch (err) {
+      if (String(err.message).includes('UNIQUE')) return reply.code(409).send({ error: 'Dieser Code ist schon vergeben.' });
+      throw err;
+    }
+    // Andere Anmeldungen dieses Mitarbeiters enden. Die aktuelle Anmeldung des Chefs bleibt.
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(id, hashToken(req.headers.authorization.slice(7)));
+    return { ok: true };
   });
 
   // --- Einstellungen ---

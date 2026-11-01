@@ -1,6 +1,5 @@
 // Spur – Desktop-Oberfläche (Schritt 1: Anmeldung, Mitarbeiter, Einstellungen)
 
-const LANGS = { de: 'Deutsch', ru: 'Russisch', uk: 'Ukrainisch' };
 const $ = (id) => document.getElementById(id);
 
 let token = null;
@@ -149,7 +148,6 @@ async function mitarbeiter(main, userId, dateStr) {
       'tr',
       { class: u.active ? '' : 'inaktiv' },
       h('td', {}, h('a', { href: `#/mitarbeiter/${u.id}` }, u.name), ' ', u.role === 'admin' ? h('span', { class: 'badge chef' }, 'Chef') : null),
-      h('td', {}, LANGS[u.language]),
       h(
         'td',
         {},
@@ -171,7 +169,8 @@ async function mitarbeiter(main, userId, dateStr) {
       h(
         'td',
         { class: 'actions' },
-        h('button', { class: 'small', onclick: () => newCode(u) }, 'Neuer Code'),
+        h('button', { class: 'small', onclick: () => setOwnCode(u) }, 'Eigenen Code festlegen'),
+        h('button', { class: 'small', onclick: () => newCode(u) }, 'Zufallscode'),
         u.id === me.id
           ? null
           : h(
@@ -190,7 +189,6 @@ async function mitarbeiter(main, userId, dateStr) {
   );
 
   const nameIn = h('input', { id: 'new-name', required: true, placeholder: 'Vorname' });
-  const langIn = h('select', { id: 'new-lang' }, Object.entries(LANGS).map(([v, t]) => h('option', { value: v }, t)));
   const carIn = h('input', { type: 'checkbox', id: 'new-car' });
   const err = h('p', { class: 'error' });
 
@@ -203,7 +201,7 @@ async function mitarbeiter(main, userId, dateStr) {
         try {
           const res = await api('/users', {
             method: 'POST',
-            body: { name: nameIn.value, language: langIn.value, uses_private_car: carIn.checked },
+            body: { name: nameIn.value, uses_private_car: carIn.checked },
           });
           showCode(res.user.name, res.code, true);
         } catch (ex) {
@@ -211,7 +209,7 @@ async function mitarbeiter(main, userId, dateStr) {
         }
       },
     },
-    h('div', { class: 'row' }, h('div', {}, h('label', { for: 'new-name' }, 'Name'), nameIn), h('div', {}, h('label', { for: 'new-lang' }, 'Sprache'), langIn)),
+    h('div', { class: 'row' }, h('div', {}, h('label', { for: 'new-name' }, 'Name'), nameIn)),
     h('div', { class: 'check' }, carIn, h('label', { for: 'new-car', style: 'margin:0;color:inherit' }, 'Nutzt ein Privatauto (Auto-Knöpfe erscheinen in der App)')),
     h('button', { class: 'primary', type: 'submit' }, 'Mitarbeiter anlegen'),
     err,
@@ -226,7 +224,7 @@ async function mitarbeiter(main, userId, dateStr) {
       h(
         'table',
         {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Sprache'), h('th', {}, 'Privatauto'), h('th', {}, 'Status'), h('th', {}, ''))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Privatauto'), h('th', {}, 'Status'), h('th', {}, ''))),
         h('tbody', {}, rows),
       ),
       h('p', { class: 'hint' }, 'Privatauto: Nur dann erscheinen in der App die Knöpfe für Privatauto und Transporter. Serhii hat zum Beispiel kein Auto.'),
@@ -235,8 +233,49 @@ async function mitarbeiter(main, userId, dateStr) {
   );
 }
 
+// Eigenen, langen Code festlegen (mindestens 12 Zeichen). Das Feld zeigt den Text offen, damit man Tippfehler sieht.
+function setOwnCode(u) {
+  const input = h('input', { id: 'own-code', autocomplete: 'off', spellcheck: 'false', placeholder: 'zum Beispiel drei Wörter und eine Zahl', style: 'max-width:none' });
+  const err = h('p', { class: 'error' });
+  const d = openDialog(
+    h('h2', {}, `Eigener Code für ${u.name}`),
+    h('p', {}, 'Mindestens 12 Buchstaben oder Zahlen. Leerzeichen und Striche zählen nicht mit, Groß- und Kleinschreibung ist egal. Je länger, desto sicherer. Drei bis vier Wörter sind gut.'),
+    h('label', { for: 'own-code' }, 'Neuer Code'),
+    input,
+    err,
+    h(
+      'div',
+      { class: 'actions', style: 'margin-top:14px' },
+      h(
+        'button',
+        {
+          class: 'primary',
+          onclick: async () => {
+            err.textContent = '';
+            try {
+              await api(`/users/${u.id}/code`, { method: 'PUT', body: { code: input.value } });
+              d.close();
+              const done = openDialog(
+                h('h2', {}, 'Code gespeichert'),
+                h('p', {}, `Schreib den Code jetzt auf, zum Beispiel auf Papier. Für ${u.name} gilt ab sofort dieser Code:`),
+                h('div', { class: 'code-box', style: 'font-size:1.2rem;letter-spacing:0.02em;word-break:break-word' }, input.value),
+                h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => done.close() }, 'Habe ich aufgeschrieben')),
+              );
+            } catch (ex) {
+              err.textContent = ex.message;
+            }
+          },
+        },
+        'Speichern',
+      ),
+      h('button', { onclick: () => d.close() }, 'Abbrechen'),
+    ),
+  );
+  input.focus();
+}
+
 async function newCode(u) {
-  if (!confirm(`Neuen Zugangscode für ${u.name} erzeugen? Der alte Code und die angemeldeten Handys werden damit ungültig.`)) return;
+  if (!confirm(`Zufälligen Zugangscode für ${u.name} erzeugen? Der alte Code und die angemeldeten Handys werden damit ungültig. Der neue Code erscheint nur einmal.`)) return;
   const res = await api(`/users/${u.id}/new-code`, { method: 'POST' });
   showCode(u.name, res.code, false);
 }

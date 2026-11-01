@@ -15,7 +15,7 @@ const db = openDb(join(dataDir, 'spur.db'));
 // Erster Start: Chef-Zugang anlegen. Der Code steht nur in dieser Datei, nie im Protokoll.
 const hasUsers = db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
 if (!hasUsers) {
-  const { code } = createUser(db, { name: 'Wladi', language: 'uk', role: 'admin', uses_private_car: 0 });
+  const { code } = createUser(db, { name: 'Wladi', language: 'de', role: 'admin', uses_private_car: 0 });
   const file = join(dataDir, 'erster-zugang.txt');
   if (!existsSync(file)) {
     writeFileSync(file, `Zugangscode für Wladi (Chef): ${code}\nDiese Datei nach dem ersten Anmelden löschen.\n`);
