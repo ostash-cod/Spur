@@ -1,4 +1,4 @@
-import { getSettings } from './db.js';
+import { getSettings, setSetting, ensureSystemSites } from './db.js';
 
 // Farben für Baustellen. Gelb (Anfahrt) und Nebelgrau (Pause, Privat) sind reserviert.
 export const SITE_COLORS = [
@@ -250,6 +250,26 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     );
     const radius = getSettings(db).site_radius_m;
     return siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), radius);
+  });
+
+  // Position einer Baustelle, des Lagers oder der Firma setzen (zum Beispiel vom Handy vor Ort).
+  app.post('/api/sites/:id/position', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const row = db.prepare('SELECT * FROM sites WHERE id = ?').get(id);
+    if (!row) return reply.code(404).send({ error: 'Baustelle nicht gefunden' });
+    const b = req.body ?? {};
+    if (!isNum(b.lat) || !isNum(b.lng) || Math.abs(b.lat) > 90 || Math.abs(b.lng) > 180) {
+      return reply.code(400).send({ error: 'Koordinaten ungültig' });
+    }
+    if (row.system) {
+      // Lager und Firma: Die Position steht in den Einstellungen.
+      const cur = getSettings(db)[row.system] ?? {};
+      setSetting(db, row.system, { lat: b.lat, lng: b.lng, radius_m: cur.radius_m ?? 100 });
+      ensureSystemSites(db);
+    } else {
+      db.prepare('UPDATE sites SET lat = ?, lng = ? WHERE id = ?').run(b.lat, b.lng, id);
+    }
+    return siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), getSettings(db).site_radius_m);
   });
 
   app.delete('/api/sites/:id', { preHandler: requireAdmin }, async (req, reply) => {

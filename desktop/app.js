@@ -103,6 +103,50 @@ function watchPair(latEl, lngEl, say) {
   });
 }
 
+// Ein Feld „Position“: Google-Maps-Link ODER „47.96138, 11.30548“ in einem Stück einfügen.
+// Breite und Länge werden darunter ausgefüllt; der Link „In Google Maps prüfen“ zeigt den Punkt.
+function positionBox(latEl, lngEl, say, onSet) {
+  const input = h('input', { type: 'text', placeholder: 'Link oder Koordinaten aus Google Maps hier einfügen', autocomplete: 'off', style: 'max-width:none' });
+  const check = h('a', { class: 'hint', target: '_blank', rel: 'noopener', style: 'display:none' }, 'In Google Maps prüfen ↗');
+  const refresh = () => {
+    const la = num(latEl.value);
+    const ln = num(lngEl.value);
+    const ok = la != null && ln != null && !Number.isNaN(la) && !Number.isNaN(ln);
+    check.style.display = ok ? '' : 'none';
+    if (ok) check.href = `https://www.google.com/maps?q=${la},${ln}`;
+  };
+  const apply = async () => {
+    const v = input.value.trim();
+    if (!v) return;
+    if (isLink(v)) {
+      if (await fillFromLink(v, latEl, lngEl, say)) { input.value = ''; onSet?.(); }
+    } else {
+      const pair = splitPair(v);
+      if (pair) {
+        latEl.value = pair[0];
+        lngEl.value = pair[1];
+        input.value = '';
+        say?.('Position übernommen ✓', 'ok');
+        onSet?.();
+      } else {
+        say?.('Das ist weder ein Link noch Koordinaten. Beispiel: 47.96138, 11.30548', 'error');
+      }
+    }
+    refresh();
+  };
+  input.addEventListener('input', () => {
+    const v = input.value.trim();
+    if (isLink(v) || splitPair(v)) apply();
+  });
+  input.addEventListener('change', apply);
+  latEl.addEventListener('input', refresh);
+  lngEl.addEventListener('input', refresh);
+  refresh();
+  const box = h('div', {}, h('label', {}, 'Position'), input, check);
+  box.refresh = refresh;
+  return box;
+}
+
 function openDialog(...content) {
   const d = $('dialog');
   d.replaceChildren(...content);
@@ -494,6 +538,7 @@ function siteDialog(site, customers) {
     if (kind === 'ok') manualCoords = true; // Die Position aus dem Link wird nicht von der Adresssuche überschrieben.
   };
   watchPair(lat, lng, say);
+  const posBox = positionBox(lat, lng, say, () => { manualCoords = true; });
   const rad = h('input', { id: 's-rad', value: s.radius_custom ? showNum(s.radius_m) : '', inputmode: 'decimal', placeholder: 'Standard' });
   const found = h('div', { id: 's-found', style: 'margin-top:6px' });
   const err = h('p', { class: 'error' });
@@ -579,6 +624,7 @@ function siteDialog(site, customers) {
     addr,
     copyAddr,
     found,
+    posBox,
     h('div', { class: 'row' }, h('div', {}, h('label', { for: 's-lat' }, 'Breite'), lat), h('div', {}, h('label', { for: 's-lng' }, 'Länge'), lng), h('div', {}, h('label', { for: 's-rad' }, 'Radius (m)'), rad)),
     h('p', { class: 'hint' }, 'Die Position wird aus der Adresse automatisch gesucht. Du kannst auch einen Google-Maps-Link in das Feld Adresse oder Breite einfügen. Mit der Position erkennt die App die Ankunft. Ohne Radius gilt der Standard aus den Einstellungen.'),
     h('div', {}, h('button', { type: 'button', class: 'small', onclick: () => searchNow(true) }, 'Position erneut suchen')),
@@ -926,15 +972,24 @@ async function einstellungen(main) {
     'Position aus der Firmenadresse suchen',
   );
 
-  const placeCard = (title, key, hint, extra = null) =>
-    h(
+  const sayStatus = (msg, kind) => {
+    status.className = kind === 'error' ? 'error' : kind === 'ok' ? 'hint ok' : 'hint';
+    status.textContent = msg;
+  };
+  const placeCard = (title, key, hint, extra = null) => {
+    const latF = field('Breite (lat)', `${key}-lat`, showNum(s[key].lat));
+    const lngF = field('Länge (lng)', `${key}-lng`, showNum(s[key].lng));
+    const posBox = positionBox(latF.querySelector('input'), lngF.querySelector('input'), sayStatus);
+    return h(
       'div',
       { class: 'card' },
       h('h2', {}, title),
-      h('div', { class: 'row' }, field('Breite (lat)', `${key}-lat`, showNum(s[key].lat)), field('Länge (lng)', `${key}-lng`, showNum(s[key].lng)), field('Radius in Metern', `${key}-r`, showNum(s[key].radius_m))),
+      posBox,
+      h('div', { class: 'row' }, latF, lngF, field('Radius in Metern', `${key}-r`, showNum(s[key].radius_m))),
       h('p', { class: 'hint' }, hint),
       extra,
     );
+  };
 
   const form = h(
     'form',
@@ -981,7 +1036,7 @@ async function einstellungen(main) {
     },
     h('div', { class: 'card' }, h('h2', {}, 'Firma'), h('label', { for: 'c-name' }, 'Name'), f.name, h('label', { for: 'c-addr' }, 'Adresse'), f.address),
     placeCard('Firma (Keltenstraße 31) – Standort', 'firma', 'Hier gilt als Start der Anfahrt zu den Kunden. Die App erkennt die Firma als festen Ort, wenn die Position eingetragen ist.', findFirma),
-    placeCard('Lager Pöcking – Standort', 'lager', 'Koordinaten wie in Google Maps (mit Punkt oder Komma).'),
+    placeCard('Lager Pöcking – Standort', 'lager', 'Link aus Google Maps oder Koordinaten („47.96138, 11.30548“) oben ins Feld Position einfügen.'),
     h(
       'div',
       { class: 'card' },
@@ -1002,10 +1057,6 @@ async function einstellungen(main) {
   );
 
   main.replaceChildren(h('h1', {}, 'Einstellungen'), h('p', { class: 'sub' }, 'Firma, Standorte, Pausenregel und Sätze.'), form);
-  const sayStatus = (msg, kind) => {
-    status.className = kind === 'error' ? 'error' : kind === 'ok' ? 'hint ok' : 'hint';
-    status.textContent = msg;
-  };
   watchPair($('firma-lat'), $('firma-lng'), sayStatus);
   watchPair($('lager-lat'), $('lager-lng'), sayStatus);
 }

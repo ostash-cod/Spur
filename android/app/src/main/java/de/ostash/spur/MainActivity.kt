@@ -14,6 +14,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -206,6 +208,7 @@ fun MainScreen() {
     var pendingSite by remember { mutableStateOf<Long?>(null) }
     var confirmEndSite by remember { mutableStateOf<SiteRow?>(null) }
     var showNewSite by remember { mutableStateOf(false) }
+    var positionSite by remember { mutableStateOf<SiteRow?>(null) }
 
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
@@ -320,6 +323,7 @@ fun MainScreen() {
                     onSiteTap = { onSiteTap(it) },
                     isAdmin = Prefs.isAdmin(ctx),
                     onNewSite = { showNewSite = true },
+                    onSiteLongPress = { positionSite = it },
                     timeline = timeline,
                 )
                 1 -> PlaceholderScreen("Berichte", "Wochen- und Monatsnachweis kommen im nächsten Schritt.")
@@ -342,6 +346,10 @@ fun MainScreen() {
             },
             dismissButton = { TextButton(onClick = { confirmEndSite = null }) { Text("Abbrechen") } },
         )
+    }
+
+    positionSite?.let { s ->
+        SetPositionDialog(s, onDismiss = { positionSite = null }, onDone = { positionSite = null })
     }
 
     if (showNewSite) {
@@ -377,6 +385,7 @@ fun TodayScreen(
     onSiteTap: (SiteRow) -> Unit,
     isAdmin: Boolean,
     onNewSite: () -> Unit,
+    onSiteLongPress: (SiteRow) -> Unit,
     timeline: List<TimelineBlock>,
 ) {
     val ctx = LocalContext.current
@@ -418,13 +427,14 @@ fun TodayScreen(
             )
         }
         for (site in sites) {
-            SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now) { onSiteTap(site) }
+            SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
         }
         if (timeline.isNotEmpty()) {
             Text("Mein Tag", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
             DayTimeline(timeline)
         }
         if (isAdmin) {
+            Text("Tipp: Kachel lange drücken = Position der Baustelle auf deinen jetzigen Standort setzen.", color = Color(0xFF6A6F75), fontSize = 13.sp)
             OutlinedButton(onClick = onNewSite, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("Neue Baustelle hier anlegen")
             }
@@ -435,7 +445,8 @@ fun TodayScreen(
 
 /** Lange Kachel in der Farbe der Baustelle. Die laufende Baustelle hat einen dicken dunklen Rand. */
 @Composable
-fun SiteTile(site: SiteRow, running: SegmentRow?, now: Long, onClick: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+fun SiteTile(site: SiteRow, running: SegmentRow?, now: Long, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     val bg = Color(android.graphics.Color.parseColor(site.color))
     val fg = if (bg.luminance() > 0.5f) Color(0xFF1B1C1E) else Color.White
     val shape = RoundedCornerShape(14.dp)
@@ -446,7 +457,7 @@ fun SiteTile(site: SiteRow, running: SegmentRow?, now: Long, onClick: () -> Unit
             .clip(shape)
             .background(bg)
             .then(if (running != null) Modifier.border(5.dp, Color(0xFF1B1C1E), shape) else Modifier)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 18.dp, vertical = 14.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -463,6 +474,65 @@ fun SiteTile(site: SiteRow, running: SegmentRow?, now: Long, onClick: () -> Unit
             }
         }
     }
+}
+
+@Composable
+fun SetPositionDialog(site: SiteRow, onDismiss: () -> Unit, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val point = remember { Db.get(ctx).lastPoint() }
+    val ageMin = if (point == null) Long.MAX_VALUE else (System.currentTimeMillis() - point.ts) / 60_000
+    val fresh = ageMin < 10
+    val accurate = point != null && point.acc <= 50f
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Position von ${site.name} setzen?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Die Position dieses Ortes wird auf deinen jetzigen Standort gesetzt. Stelle dich dafür möglichst in die Mitte.")
+                Text(
+                    when {
+                        point == null || !fresh -> "Kein aktueller Standort. Starte zuerst den Tag und warte kurz."
+                        !accurate -> "Der Standort ist noch zu ungenau (${point.acc.toInt()} m). Warte kurz im Freien und versuche es noch einmal."
+                        else -> "Dein Standort: vor $ageMin Min., Genauigkeit ${point.acc.toInt()} m"
+                    },
+                    color = if (fresh && accurate) Color(0xFF6A6F75) else Rot,
+                )
+                if (error.isNotEmpty()) Text(error, color = Rot)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy && fresh && accurate,
+                onClick = {
+                    busy = true
+                    error = ""
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) {
+                                Api.post(
+                                    ctx,
+                                    "/api/sites/${site.id}/position",
+                                    JSONObject().put("lat", point!!.lat).put("lng", point.lng),
+                                    Prefs.token(ctx) ?: "",
+                                )
+                            }
+                            SyncWorker.enqueue(ctx)
+                            onDone()
+                        } catch (e: Api.ApiException) {
+                            error = e.message ?: "Fehler"
+                        } catch (e: Exception) {
+                            error = "Keine Verbindung zum Server"
+                        }
+                        busy = false
+                    }
+                },
+            ) { Text("Position setzen", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
+    )
 }
 
 @Composable

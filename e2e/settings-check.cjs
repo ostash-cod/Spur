@@ -43,6 +43,18 @@ let srv;
   await page.waitForSelector('[role=status].error');
   console.log('Link ohne Position ->', await page.textContent('[role=status]'));
 
+  // 2d) Neues Feld „Position“: Google-Text und Link
+  const pos = page.locator('#main .card', { hasText: 'Lager Pöcking' }).locator('input[placeholder^="Link oder"]');
+  await pos.fill('47.96138, 11.30548');
+  console.log('Position-Feld Koordinaten:', await page.inputValue('#lager-lat'), '|', await page.inputValue('#lager-lng'), '| Feld geleert:', (await pos.inputValue()) === '');
+  await pos.fill('https://maps.app.goo.gl/MoHJRb1xH5keaX6U9');
+  await page.waitForFunction(() => document.querySelector('#lager-lat').value === '47,9655');
+  console.log('Position-Feld Link:', await page.inputValue('#lager-lat'), '|', await page.inputValue('#lager-lng'));
+  console.log('Prüf-Link:', await page.locator('#main .card', { hasText: 'Lager Pöcking' }).locator('a:has-text("Google Maps")').getAttribute('href'));
+  await pos.fill('Hallo Welt'); await pos.dispatchEvent('change');
+  await page.waitForSelector('[role=status].error');
+  console.log('Unsinn ->', await page.textContent('[role=status]'));
+
   // 3) Position aus der Adresse suchen
   await page.click('button:has-text("Position aus der Firmenadresse suchen")');
   await page.waitForSelector('[role=status].ok');

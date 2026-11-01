@@ -268,3 +268,26 @@ test('Schnittstelle /api/maplink: nur Chef, liefert Breite und Länge, Fehler ve
   assert.equal(e.statusCode, 502);
   assert.match(e.json().error, /von Hand/);
 });
+
+test('Position setzen (Handy vor Ort): Baustelle, Lager und Firma, nur Chef, nur gültige Werte', async () => {
+  const { call, at, wt } = await setup();
+  const site = (await call('POST', '/api/sites', at, { name: 'Neu hier' })).json();
+  assert.equal(site.lat, null);
+  assert.equal((await call('POST', `/api/sites/${site.id}/position`, wt, { lat: 47.9, lng: 11.3 })).statusCode, 403);
+  assert.equal((await call('POST', `/api/sites/${site.id}/position`, at, { lat: 99, lng: 11.3 })).statusCode, 400);
+  assert.equal((await call('POST', `/api/sites/${site.id}/position`, at, { lat: 47.9 })).statusCode, 400);
+  assert.equal((await call('POST', '/api/sites/999/position', at, { lat: 47.9, lng: 11.3 })).statusCode, 404);
+  const ok = (await call('POST', `/api/sites/${site.id}/position`, at, { lat: 47.912345, lng: 11.312345 })).json();
+  assert.equal(ok.lat, 47.912345);
+  assert.equal(ok.radius_m, 100);
+
+  // Lager und Firma: Position landet in den Einstellungen und im festen Ort
+  const all = (await call('GET', '/api/sites?all=1', at)).json();
+  const firma = all.find((s) => s.system === 'firma');
+  const set = (await call('POST', `/api/sites/${firma.id}/position`, at, { lat: 47.9655, lng: 11.3123 })).json();
+  assert.equal(set.lat, 47.9655);
+  const settings = (await call('GET', '/api/settings', at)).json();
+  assert.equal(settings.firma.lat, 47.9655);
+  assert.equal(settings.firma.radius_m, 100, 'Radius bleibt');
+  assert.equal(all.filter((s) => s.system).length, 2);
+});
