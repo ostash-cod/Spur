@@ -2,9 +2,10 @@ import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { getSettings, setSetting, DEFAULT_SETTINGS } from './db.js';
 import {
+  candidateHashes,
   createUser,
+  foldCode,
   hashCode,
-  normalizeCode,
   hashToken,
   newToken,
   publicUser,
@@ -109,9 +110,10 @@ export async function buildApp({ db, staticDir, logger = false } = {}) {
     if (recent.length >= MAX_FAILED_LOGINS) {
       return reply.code(429).send({ error: 'Zu viele Versuche. Bitte in 15 Minuten noch einmal.' });
     }
+    const hashes = candidateHashes(req.body?.code);
     const user = db
-      .prepare('SELECT * FROM users WHERE code_hash = ? AND active = 1')
-      .get(hashCode(req.body?.code));
+      .prepare(`SELECT * FROM users WHERE code_hash IN (${hashes.map(() => '?').join(',')}) AND active = 1`)
+      .get(...hashes);
     if (!user) {
       recent.push(now);
       failedLogins.set(ip, recent);
@@ -192,7 +194,7 @@ export async function buildApp({ db, staticDir, logger = false } = {}) {
       return reply.code(404).send({ error: 'Mitarbeiter nicht gefunden' });
     }
     const raw = req.body?.code;
-    const norm = normalizeCode(raw);
+    const norm = foldCode(raw);
     if (norm.length < 12) {
       return reply.code(400).send({ error: 'Der Code braucht mindestens 12 Buchstaben oder Zahlen (Leerzeichen und Striche zählen nicht).' });
     }

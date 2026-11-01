@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -134,10 +135,14 @@ fun LoginScreen(onDone: () -> Unit) {
             Text("von Wladi", color = Color(0xFF6A6F75))
             OutlinedTextField(
                 value = code,
-                onValueChange = { code = it.uppercase() },
+                onValueChange = { code = it },
                 label = { Text("Zugangscode") },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Text,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
@@ -145,6 +150,7 @@ fun LoginScreen(onDone: () -> Unit) {
                 onValueChange = { server = it },
                 label = { Text("Server") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
             )
             if (error.isNotEmpty()) Text(error, color = Rot)
@@ -156,7 +162,7 @@ fun LoginScreen(onDone: () -> Unit) {
                     Prefs.setServerUrl(ctx, server)
                     scope.launch {
                         try {
-                            val res = withContext(Dispatchers.IO) { Api.login(ctx, code) }
+                            val res = withContext(Dispatchers.IO) { Api.login(ctx, code.trim()) }
                             val user = res.getJSONObject("user")
                             Prefs.saveLogin(ctx, res.getString("token"), user.getString("name"), user.getBoolean("uses_private_car"))
                             onDone()

@@ -9,12 +9,31 @@ export function generateCode() {
   return `${raw.slice(0, 4)}-${raw.slice(4)}`;
 }
 
+// Frühere Schreibweise (Umlaute bleiben erhalten). Wird weiter akzeptiert, damit bereits gesetzte Codes gelten.
 export function normalizeCode(code) {
   return String(code ?? '').toUpperCase().replace(/[^\p{L}\p{N}]/gu, '');
 }
 
+// Aktuelle Schreibweise: Groß/Klein, Leerzeichen, Striche und Zeichen-Zusätze (zum Beispiel die
+// Pünktchen auf ä) zählen nicht. So macht es keinen Unterschied, wie die Handy-Tastatur ein ä erzeugt.
+export function foldCode(code) {
+  return String(code ?? '')
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toUpperCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+const sha = (s) => createHash('sha256').update(s).digest('hex');
+
 export function hashCode(code) {
-  return createHash('sha256').update(normalizeCode(code)).digest('hex');
+  return sha(foldCode(code));
+}
+
+// Alle Hashes, mit denen ein eingegebener Code gespeichert sein könnte (neu und früher).
+export function candidateHashes(code) {
+  const raw = String(code ?? '');
+  return [...new Set([sha(foldCode(raw)), sha(normalizeCode(raw)), sha(normalizeCode(raw.normalize('NFC')))])];
 }
 
 export function newToken() {

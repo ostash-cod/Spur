@@ -277,3 +277,27 @@ test('Eigener Code: Regeln, Umlaute, Doppelte, Sitzungen', async () => {
   assert.equal((await login2(workerCode)).statusCode, 200);
   assert.equal((await put(999, mine)).statusCode, 404);
 });
+
+test('Umlaute: Handy-Tastatur (zerlegt) und PC (zusammengesetzt) ergeben denselben Code, auch bei früher gespeicherten Codes', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const app2 = await buildApp({ db: db2 });
+  const login2 = (c) => app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } });
+  const at = (await login2(a.code)).json().token;
+  const nfc = 'Putz Estrich Dämmung 77'.normalize('NFC');
+  const nfd = nfc.normalize('NFD');
+  assert.notEqual(nfc, nfd);
+  const set = await app2.inject({ method: 'PUT', url: `/api/users/${a.id}/code`, headers: auth(at), payload: { code: nfc } });
+  assert.equal(set.statusCode, 200);
+  for (const v of [nfc, nfd, nfc.toUpperCase(), nfd.toUpperCase(), 'PUTZ-ESTRICH-DAMMUNG-77']) {
+    assert.equal((await login2(v)).statusCode, 200, v);
+  }
+  // Früher gespeicherter Code (Umlaut bleibt Teil des Codes) gilt weiter, auch bei zerlegter Eingabe
+  const { createHash } = await import('node:crypto');
+  const legacy = createHash('sha256').update('SPÄTERCODE12345'.normalize('NFC')).digest('hex');
+  db2.prepare('UPDATE users SET code_hash = ? WHERE id = ?').run(legacy, a.id);
+  for (const v of ['Späterercode'.length ? 'spätercode12345' : '', 'spätercode12345'.normalize('NFD'), 'SPÄTERCODE-12345']) {
+    assert.equal((await login2(v)).statusCode, 200, v);
+  }
+  assert.equal((await login2('anderer code 1234567')).statusCode, 401);
+});
