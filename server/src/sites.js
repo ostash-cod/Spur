@@ -16,6 +16,8 @@ export const SITE_COLORS = [
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+const KINDS = ['baustelle', 'haendler'];
+const HAENDLER_COLOR = '#8D6E63';
 
 function text(v, max = 200) {
   if (v == null) return null;
@@ -109,6 +111,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     active: !!r.active,
     archived: !!r.archived,
     system: r.system ?? null,
+    kind: r.kind ?? 'baustelle',
   });
 
   const SITE_SELECT = `SELECT s.*, c.name AS customer_name FROM sites s LEFT JOIN customers c ON c.id = s.customer_id`;
@@ -184,8 +187,15 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     return rows.map((r) => siteRow(r, radius));
   });
 
-  app.post('/api/sites', { preHandler: requireAdmin }, async (req, reply) => {
+  // Händler (zum Beispiel Brillux) darf jeder anlegen, der an Ort und Stelle steht. Baustellen nur der Chef.
+  app.post('/api/sites', { preHandler: requireUser }, async (req, reply) => {
     const b = req.body ?? {};
+    const kind = b.kind === undefined ? 'baustelle' : b.kind;
+    if (!KINDS.includes(kind)) return reply.code(400).send({ error: 'Art ungültig' });
+    if (kind !== 'haendler' && req.user.role !== 'admin') return reply.code(403).send({ error: 'Nur für den Chef' });
+    if (kind === 'haendler' && req.user.role !== 'admin' && (b.customer_id != null || b.create_customer || b.color !== undefined || b.radius_m != null)) {
+      return reply.code(403).send({ error: 'Nur für den Chef' });
+    }
     const name = text(b.name);
     if (!name) return reply.code(400).send({ error: 'Name fehlt' });
     const placeErr = checkPlace(b);
@@ -196,20 +206,21 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     if (b.customer_id != null && !db.prepare('SELECT 1 FROM customers WHERE id = ?').get(Number(b.customer_id))) {
       return reply.code(400).send({ error: 'Kunde nicht gefunden' });
     }
-    let customerId = b.customer_id ?? null;
-    if (customerId == null && b.create_customer === true) {
+    let customerId = kind === 'haendler' ? null : (b.customer_id ?? null);
+    if (kind === 'baustelle' && customerId == null && b.create_customer === true) {
       const c = db.prepare('INSERT INTO customers (name, address) VALUES (?, ?)').run(name, text(b.address, 300));
       customerId = Number(c.lastInsertRowid);
     }
     let color = b.color;
     if (color != null && !COLOR_RE.test(color)) return reply.code(400).send({ error: 'Farbe ungültig' });
+    if (color == null && kind === 'haendler') color = HAENDLER_COLOR;
     if (color == null) {
       const used = new Set(db.prepare('SELECT color FROM sites WHERE archived = 0').all().map((r) => r.color.toUpperCase()));
       color = SITE_COLORS.find((c) => !used.has(c.toUpperCase())) ?? SITE_COLORS[used.size % SITE_COLORS.length];
     }
     const info = db
-      .prepare('INSERT INTO sites (customer_id, name, address, lat, lng, radius_m, color) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(customerId, name, text(b.address, 300), b.lat ?? null, b.lng ?? null, b.radius_m ?? null, color.toUpperCase());
+      .prepare('INSERT INTO sites (customer_id, name, address, lat, lng, radius_m, color, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(customerId, name, text(b.address, 300), b.lat ?? null, b.lng ?? null, b.radius_m ?? null, color.toUpperCase(), kind);
     const radius = getSettings(db).site_radius_m;
     return reply.code(201).send(siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(Number(info.lastInsertRowid)), radius));
   });
@@ -233,9 +244,10 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
       return reply.code(400).send({ error: 'Kunde nicht gefunden' });
     }
     if (b.color !== undefined && !COLOR_RE.test(b.color)) return reply.code(400).send({ error: 'Farbe ungültig' });
+    if (b.kind !== undefined && !KINDS.includes(b.kind)) return reply.code(400).send({ error: 'Art ungültig' });
     const pick = (key, current) => (b[key] === undefined ? current : b[key]);
     db.prepare(
-      `UPDATE sites SET customer_id = ?, name = ?, address = ?, lat = ?, lng = ?, radius_m = ?, color = ?, active = ?, archived = ? WHERE id = ?`,
+      `UPDATE sites SET customer_id = ?, name = ?, address = ?, lat = ?, lng = ?, radius_m = ?, color = ?, active = ?, archived = ?, kind = ? WHERE id = ?`,
     ).run(
       pick('customer_id', row.customer_id) ?? null,
       name,
@@ -246,6 +258,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
       (pick('color', row.color)).toUpperCase(),
       b.active === undefined ? row.active : b.active ? 1 : 0,
       b.archived === undefined ? row.archived : b.archived ? 1 : 0,
+      pick('kind', row.kind ?? 'baustelle'),
       id,
     );
     const radius = getSettings(db).site_radius_m;

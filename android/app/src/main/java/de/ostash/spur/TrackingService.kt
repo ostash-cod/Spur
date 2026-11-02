@@ -34,6 +34,7 @@ class TrackingService : Service() {
 
     // Automatische Erkennung von Baustellen, Lager und Firma
     private var detector: PlaceDetector? = null
+    private var stopDetector: StopDetector? = null
     private var lastFix: Fix? = null
     private var tickCount = 0
     private val handler = Handler(Looper.getMainLooper())
@@ -46,7 +47,11 @@ class TrackingService : Service() {
                 if (tickCount % 6 == 0) d.places = loadPlaces()
                 // Liegt das Handy still, kommen keine neuen Punkte. Dann zählt der letzte Standort weiter.
                 val now = System.currentTimeMillis()
-                if (f != null && now - f.ts < STALE_FIX_MS) handle(d.onFix(f.copy(ts = now)))
+                if (f != null && now - f.ts < STALE_FIX_MS) {
+                    val fix = f.copy(ts = now)
+                    handle(d.onFix(fix))
+                    stopDetector?.onFix(fix, d.currentSiteId != null)?.let { handleStop(it) }
+                }
             }
             handler.postDelayed(this, TICK_MS)
         }
@@ -57,7 +62,7 @@ class TrackingService : Service() {
             val lat = s.lat
             val lng = s.lng
             if (lat == null || lng == null) null
-            else Place(s.id, lat, lng, s.radius, if (s.system != null) DWELL_SYSTEM_MS else DWELL_SITE_MS)
+            else Place(s.id, lat, lng, s.radius, if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS)
         }
 
     private fun handle(events: List<PlaceEvent>) {
@@ -76,6 +81,46 @@ class TrackingService : Service() {
         SyncWorker.enqueue(this)
     }
 
+    // Halt an einem unbekannten Ort: Die App merkt ihn sich und fragt (Pause, Ort benennen oder einfach weiter).
+    private fun handleStop(e: StopEvent) {
+        if (dayId < 0) return
+        val db = Db.get(this)
+        when (e) {
+            is StopEvent.Stop -> {
+                // Hat der Mitarbeiter von Hand eine Baustelle gewählt, steht er dort. Dann wird nicht gefragt.
+                if (db.openSegment(dayId)?.kind == "work") return
+                db.addStop(dayId, e.lat, e.lng, e.since)
+                notifyStop(e.since)
+            }
+            is StopEvent.Resume -> {
+                val stop = db.latestStop(dayId) ?: return
+                if (stop.endedAt != null) return
+                db.endStop(stop.id, e.at)
+                // Eine Pause oder ein Händler-Abschnitt, der von diesem Halt kam, endet mit dem Halt.
+                stop.segClientId?.let { db.endSegmentByClientId(dayId, it, maxOf(e.at, stop.startedAt)) }
+                SyncWorker.enqueue(this)
+            }
+        }
+    }
+
+    private fun notifyStop(since: Long) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.createNotificationChannel(NotificationChannel(ASK_CHANNEL, "Nachfragen", NotificationManager.IMPORTANCE_DEFAULT))
+        val open = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.GERMANY).format(java.util.Date(since))
+        val n = NotificationCompat.Builder(this, ASK_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentTitle("Spur: Wo bist du?")
+            .setContentText("Du stehst seit $time Uhr an einem unbekannten Ort. Zum Antworten tippen.")
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        runCatching { nm.notify(ASK_NOTIFICATION_ID, n) }
+    }
+
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             val db = Db.get(this@TrackingService)
@@ -84,7 +129,10 @@ class TrackingService : Service() {
                 sinceSync++
                 val fix = Fix(loc.time, loc.latitude, loc.longitude, loc.accuracy)
                 lastFix = fix
-                detector?.let { handle(it.onFix(fix)) }
+                detector?.let { d ->
+                    handle(d.onFix(fix))
+                    stopDetector?.onFix(fix, d.currentSiteId != null)?.let { handleStop(it) }
+                }
             }
             if (sinceSync >= SYNC_EVERY_POINTS) {
                 sinceSync = 0
@@ -130,6 +178,7 @@ class TrackingService : Service() {
         startInForeground()
         if (!granted) return
         detector = PlaceDetector(loadPlaces())
+        stopDetector = StopDetector()
         lastFix = null
         handler.removeCallbacks(tick)
         handler.postDelayed(tick, TICK_MS)
@@ -146,6 +195,7 @@ class TrackingService : Service() {
     private fun stopTracking() {
         handler.removeCallbacks(tick)
         detector = null
+        stopDetector = null
         if (running) {
             LocationServices.getFusedLocationProviderClient(this).removeLocationUpdates(callback)
             running = false
@@ -190,6 +240,8 @@ class TrackingService : Service() {
         const val ACTION_STOP = "de.ostash.spur.STOP"
         private const val CHANNEL = "tracking"
         private const val NOTIFICATION_ID = 1
+        private const val ASK_CHANNEL = "ask"
+        private const val ASK_NOTIFICATION_ID = 2
         private const val INTERVAL_MS = 15_000L
         private const val MIN_DISTANCE_M = 15f
         private const val SYNC_EVERY_POINTS = 40

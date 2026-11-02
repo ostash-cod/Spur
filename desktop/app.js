@@ -399,13 +399,13 @@ async function kunden(main) {
   const visibleSites = sites.filter((s) => showArchived || !s.archived);
   const visibleCustomers = customers.filter((c) => showArchived || !c.archived);
 
-  const siteRows = visibleSites.map((s) =>
+  const rowFor = (s, withCustomer) =>
     h(
       'tr',
       { class: s.archived ? 'inaktiv' : '' },
       h('td', {}, h('span', { class: 'dot', style: `background:${s.color}`, title: s.color })),
       h('td', {}, h('strong', {}, s.name), s.system ? h('span', { class: 'badge', style: 'margin-left:6px' }, 'fester Ort') : null),
-      h('td', {}, s.customer_name ?? '–'),
+      withCustomer ? h('td', {}, s.customer_name ?? '–') : null,
       h('td', {}, s.address ?? ''),
       h('td', {}, s.lat == null ? h('span', { class: 'warn' }, 'Koordinaten fehlen') : `${s.radius_m} m`),
       h(
@@ -441,10 +441,11 @@ async function kunden(main) {
           },
           s.archived ? 'Wiederherstellen' : 'Archivieren',
         ),
-        h('button', { class: 'small danger', onclick: () => deleteWithConfirm('Baustelle', s, `/sites/${s.id}`) }, 'Löschen'),
+        h('button', { class: 'small danger', onclick: () => deleteWithConfirm(s.kind === 'haendler' ? 'Händler' : 'Baustelle', s, `/sites/${s.id}`) }, 'Löschen'),
       ),
-    ),
-  );
+    );
+  const siteRows = visibleSites.filter((s) => s.kind !== 'haendler').map((s) => rowFor(s, true));
+  const haendlerRows = visibleSites.filter((s) => s.kind === 'haendler').map((s) => rowFor(s, false));
 
   const customerRows = visibleCustomers.map((c) =>
     h(
@@ -488,6 +489,14 @@ async function kunden(main) {
     h(
       'div',
       { class: 'card' },
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Händler (Baumarkt, Großhandel)'), h('button', { onclick: () => siteDialog(null, customers, 'haendler') }, 'Neuer Händler')),
+      haendlerRows.length
+        ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Händler'), h('th', {}, 'Adresse'), h('th', {}, 'Erkennung'), h('th', {}, 'Aktiv'), h('th', {}, ''))), h('tbody', {}, haendlerRows))
+        : h('p', { class: 'hint' }, 'Noch kein Händler. Händler legst du am Handy an, wenn du dort bist („Ort hier speichern“), oder hier. Fahrten von einer Baustelle zum Händler und zurück gelten als Materialfahrt.'),
+    ),
+    h(
+      'div',
+      { class: 'card' },
       h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Kunden'), h('button', { onclick: () => customerDialog(null) }, 'Neuer Kunde')),
       customerRows.length
         ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Kunde'), h('th', {}, 'Adresse'), h('th', {}, 'E-Mail'), h('th', {}, 'Stundensatz'), h('th', {}, ''))), h('tbody', {}, customerRows))
@@ -517,10 +526,12 @@ function sessionStorageSet(k, v) {
   try { sessionStorage.setItem(k, v); } catch { /* ohne Speicher geht es auch */ }
 }
 
-function siteDialog(site, customers) {
+function siteDialog(site, customers, kindArg) {
   const s = site ?? {};
+  const kind = site?.kind ?? kindArg ?? 'baustelle';
+  const isHaendler = kind === 'haendler';
   const byId = new Map(customers.map((c) => [c.id, c]));
-  const name = h('input', { id: 's-name', value: s.name ?? '', placeholder: 'zum Beispiel Lilienstraße 77', style: 'max-width:none' });
+  const name = h('input', { id: 's-name', value: s.name ?? '', placeholder: isHaendler ? 'zum Beispiel Brillux Starnberg' : 'zum Beispiel Lilienstraße 77', style: 'max-width:none' });
   const cust = h(
     'select',
     { id: 's-cust', style: 'max-width:none', onchange: () => updateCustomerUi() },
@@ -614,15 +625,13 @@ function siteDialog(site, customers) {
   drawSwatches();
 
   const d = openDialog(
-    h('h2', {}, site ? 'Baustelle bearbeiten' : 'Neue Baustelle'),
-    h('label', { for: 's-name' }, 'Name der Baustelle'),
+    h('h2', {}, isHaendler ? (site ? 'Händler bearbeiten' : 'Neuer Händler') : site ? 'Baustelle bearbeiten' : 'Neue Baustelle'),
+    h('label', { for: 's-name' }, isHaendler ? 'Name des Händlers' : 'Name der Baustelle'),
     name,
-    h('label', { for: 's-cust' }, 'Kunde (optional)'),
-    cust,
-    autoCustRow,
-    h('label', { for: 's-addr' }, 'Adresse der Baustelle'),
+    ...(isHaendler ? [] : [h('label', { for: 's-cust' }, 'Kunde (optional)'), cust, autoCustRow]),
+    h('label', { for: 's-addr' }, isHaendler ? 'Adresse des Händlers' : 'Adresse der Baustelle'),
     addr,
-    copyAddr,
+    ...(isHaendler ? [] : [copyAddr]),
     found,
     posBox,
     h('div', { class: 'row' }, h('div', {}, h('label', { for: 's-lat' }, 'Breite'), lat), h('div', {}, h('label', { for: 's-lng' }, 'Länge'), lng), h('div', {}, h('label', { for: 's-rad' }, 'Radius (m)'), rad)),
@@ -645,9 +654,9 @@ function siteDialog(site, customers) {
             const r = num(rad.value);
             if (Number.isNaN(la) || Number.isNaN(ln) || Number.isNaN(r)) return (err.textContent = 'Koordinaten und Radius müssen Zahlen sein.');
             if ((la === null) !== (ln === null)) return (err.textContent = 'Breite und Länge nur zusammen eintragen.');
-            const body = { name: name.value, customer_id: cust.value ? Number(cust.value) : null, address: addr.value, lat: la, lng: ln, radius_m: r };
+            const body = { name: name.value, customer_id: isHaendler || !cust.value ? null : Number(cust.value), address: addr.value, lat: la, lng: ln, radius_m: r, kind };
             if (color) body.color = color;
-            if (!site && !cust.value && autoCust.checked) body.create_customer = true;
+            if (!isHaendler && !site && !cust.value && autoCust.checked) body.create_customer = true;
             try {
               await api(site ? `/sites/${site.id}` : '/sites', { method: site ? 'PATCH' : 'POST', body });
               d.close();
@@ -806,10 +815,34 @@ function buildBlocks(day, siteById) {
   if (end - cursor >= MIN_TRAVEL_MS) {
     out.push({ type: 'travel', label: !segs.length ? 'Unterwegs' : day.ended_at ? 'Heimfahrt' : 'Unterwegs', start: cursor, end });
   }
+  assignTrips(out, day.trip_marks ?? [], siteById);
   return out;
 }
 
-function timelineView(day, siteById) {
+// Eine Fahrt-Gruppe ist alles zwischen zwei Baustellen-Blöcken, was nicht Baustelle ist: Fahrten und Händler.
+// Fährt man von Baustelle X weg und kommt zu X zurück, ist das automatisch eine Materialfahrt für X (Streifen in der Farbe von X).
+// Der Chef kann pro Gruppe ändern: normale Fahrt, oder Materialfahrt für eine andere Baustelle.
+const isHaendlerBlock = (b) => b.type === 'site' && b.site?.kind === 'haendler';
+const isRunBlock = (b) => b.type === 'travel' || isHaendlerBlock(b);
+function assignTrips(blocks, marks, siteById) {
+  let i = 0;
+  while (i < blocks.length) {
+    if (!isRunBlock(blocks[i])) { i += 1; continue; }
+    let j = i;
+    while (j < blocks.length && isRunBlock(blocks[j])) j += 1;
+    const prev = blocks[i - 1];
+    const next = blocks[j];
+    const real = (b) => b && b.type === 'site' && b.site && !b.site.system && b.site.kind !== 'haendler';
+    const auto = real(prev) && real(next) && prev.site.id === next.site.id ? prev.site : null;
+    const key = blocks[i].start;
+    const mark = marks.find((m) => m.started_at === key) ?? null;
+    const target = mark ? (mark.mode === 'material' ? siteById.get(mark.site_id) ?? null : null) : auto;
+    for (let k = i; k < j; k += 1) blocks[k].trip = { key, target, auto, mark };
+    i = j;
+  }
+}
+
+function timelineView(day, siteById, onTrip) {
   const blocks = buildBlocks(day, siteById);
   if (!blocks.length) return h('p', { class: 'hint' }, 'Noch keine Zeit gebucht.');
   const t0 = Math.floor(day.started_at / 3600000) * 3600000;
@@ -827,14 +860,22 @@ function timelineView(day, siteById) {
     prevBottom = top + height;
     const dur = fmtDuration(b.end - b.start);
     const times = `${fmtTime(b.start)} bis ${fmtTime(b.end)}`;
+    const stripe = b.trip?.target ?? null;
+    const stripeStyle = stripe ? `background:repeating-linear-gradient(135deg,#F5C400 0 12px,${stripe.color} 12px 24px);color:#1B1C1E;` : '';
+    const tripNote = stripe ? ` · Material für ${stripe.name}` : '';
+    const clickable = onTrip && b.trip ? { class: 'clickable', title: 'Klicken: Fahrt ändern', onclick: () => onTrip(b.trip) } : {};
     if (b.type === 'travel') {
       box.append(
-        h('div', { class: 'block travel', style: `top:${top}px;height:${height}px` }, vanIcon(), h('div', {}, h('strong', {}, `${b.label} · ${dur}`), height >= 44 ? h('div', { class: 'small' }, times) : null)),
+        h('div', { ...clickable, class: `block travel${stripe ? ' striped' : ''}${clickable.class ? ' clickable' : ''}`, style: `top:${top}px;height:${height}px;${stripeStyle}` }, vanIcon(), h('div', {}, h('strong', { class: stripe ? 'on-stripe' : '' }, `${b.label} · ${dur}${tripNote}`), height >= 44 ? h('div', { class: `small${stripe ? ' on-stripe' : ''}` }, times) : null)),
+      );
+    } else if (isHaendlerBlock(b)) {
+      box.append(
+        h('div', { ...clickable, class: `block site${stripe ? ' striped' : ''}${clickable.class ? ' clickable' : ''}`, style: `top:${top}px;height:${height}px;${stripe ? stripeStyle : `background:${b.site.color};color:#FFFFFF;`}` }, h('div', {}, h('strong', { class: stripe ? 'on-stripe' : '' }, `${b.site.name} · ${dur}${tripNote}`), height >= 44 ? h('div', { class: `small${stripe ? ' on-stripe' : ''}` }, `${times} · Händler`) : null)),
       );
     } else {
       const color = b.site?.color ?? '#B8BCC2';
       const fg = isLight(color) ? '#1B1C1E' : '#FFFFFF';
-      const name = b.site?.name ?? 'Ohne Baustelle';
+      const name = b.seg.kind === 'break' ? 'Pause' : b.seg.kind === 'private' ? 'Privat' : b.site?.name ?? 'Ohne Baustelle';
       box.append(
         h(
           'div',
@@ -871,6 +912,48 @@ function segmentList(day, siteById) {
   return h('table', { style: 'margin:6px 0 10px' }, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Baustelle'), h('th', {}, 'Zeit'), h('th', {}, 'Dauer'), h('th', {}, 'Wie'))), h('tbody', {}, rows));
 }
 
+// Fahrt ändern: Streifen wegnehmen, oder als Materialfahrt einer anderen Baustelle zuordnen.
+function tripDialog(day, trip, sites) {
+  const targets = sites.filter((s) => s.kind !== 'haendler' && !s.system && !s.archived);
+  const sel = h(
+    'select',
+    { id: 'trip-site', style: 'max-width:none' },
+    ...targets.map((s) => h('option', { value: s.id, selected: s.id === (trip.target?.id ?? trip.auto?.id) }, s.name)),
+  );
+  const err = h('p', { class: 'error' });
+  const save = async (body) => {
+    try {
+      await api(`/days/${day.id}/trip-mark`, { method: 'PUT', body: { started_at: trip.key, ...body } });
+      d.close();
+      route();
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+  };
+  const state = trip.mark
+    ? trip.mark.mode === 'normal'
+      ? 'Von dir als normale Fahrt eingestellt.'
+      : `Von dir als Materialfahrt für ${trip.target?.name ?? '?'} eingestellt.`
+    : trip.auto
+      ? `Automatisch erkannt: Materialfahrt für ${trip.auto.name} (Start und Ziel waren dieselbe Baustelle).`
+      : 'Normale Fahrt.';
+  const d = openDialog(
+    h('h2', {}, 'Fahrt ändern'),
+    h('p', { class: 'hint' }, state),
+    h('label', { for: 'trip-site' }, 'Materialfahrt für Baustelle'),
+    sel,
+    err,
+    h(
+      'div',
+      { class: 'actions', style: 'margin-top:14px;flex-wrap:wrap' },
+      h('button', { class: 'primary', disabled: !targets.length, onclick: () => save({ mode: 'material', site_id: Number(sel.value) }) }, 'Als Materialfahrt speichern'),
+      h('button', { onclick: () => save({ mode: 'normal' }) }, 'Normale Fahrt (ohne Streifen)'),
+      trip.mark ? h('button', { onclick: () => save({ mode: 'auto' }) }, 'Zurück auf automatisch') : null,
+      h('button', { onclick: () => d.close() }, 'Abbrechen'),
+    ),
+  );
+}
+
 async function tagesansicht(main, userId, dateStr) {
   const users = await api('/users');
   const user = users.find((u) => u.id === userId);
@@ -901,7 +984,7 @@ async function tagesansicht(main, userId, dateStr) {
           { class: 'card' },
           h('h2', {}, `${fmtTime(d.started_at)} bis ${d.ended_at ? fmtTime(d.ended_at) : 'läuft noch'} · ${fmtDuration(end - d.started_at)}`),
           h('p', { class: 'hint' }, `${d.points.length} GPS-Punkte`),
-          timelineView(d, siteById),
+          timelineView(d, siteById, (trip) => tripDialog(d, trip, sites)),
           h('details', { style: 'margin:10px 0' }, h('summary', {}, 'Abschnitte als Liste'), segmentList(d, siteById)),
           h('details', {}, h('summary', {}, 'Gefahrener Weg mit Baustellen, Lager und Firma (Kreise = Erkennungsradius)'), trackSvg(d.points, sites)),
         );

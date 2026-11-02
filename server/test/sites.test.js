@@ -291,3 +291,39 @@ test('Position setzen (Handy vor Ort): Baustelle, Lager und Firma, nur Chef, nur
   assert.equal(settings.firma.radius_m, 100, 'Radius bleibt');
   assert.equal(all.filter((s) => s.system).length, 2);
 });
+
+test('Händler: jeder darf einen anlegen, Baustellen nur der Chef; Art ist änderbar', async () => {
+  const { call, at, wt } = await setup();
+  const hd = await call('POST', '/api/sites', wt, { name: 'Brillux', kind: 'haendler', lat: 48.0, lng: 11.0 });
+  assert.equal(hd.statusCode, 201);
+  assert.equal(hd.json().kind, 'haendler');
+  assert.equal(hd.json().customer_id, null);
+  assert.equal((await call('POST', '/api/sites', wt, { name: 'Baustelle X', lat: 48.0, lng: 11.0 })).statusCode, 403);
+  assert.equal((await call('POST', '/api/sites', wt, { name: 'Brillux 2', kind: 'haendler', color: '#112233' })).statusCode, 403, 'Mitarbeiter ohne Sonderwünsche');
+  assert.equal((await call('POST', '/api/sites', at, { name: 'Y', kind: 'quatsch' })).statusCode, 400);
+  const b = (await call('POST', '/api/sites', at, { name: 'Lilienstraße 77', lat: 48.1, lng: 11.6 })).json();
+  assert.equal(b.kind, 'baustelle');
+  const all = (await call('GET', '/api/sites', wt)).json();
+  assert.ok(all.some((s) => s.kind === 'haendler' && s.name === 'Brillux'));
+  const upd = (await call('PATCH', `/api/sites/${hd.json().id}`, at, { kind: 'baustelle' })).json();
+  assert.equal(upd.kind, 'baustelle');
+});
+
+test('Fahrt-Markierung: Materialfahrt einer Baustelle zuordnen, Streifen wegnehmen, zurücksetzen', async () => {
+  const { call, at, wt, db } = await setup();
+  const site = (await call('POST', '/api/sites', at, { name: 'Lilienstraße 77', lat: 48.1, lng: 11.6 })).json();
+  const dayRes = await call('POST', '/api/days', wt, { client_id: 'day-client-0001', started_at: 1_770_000_000_000 });
+  const dayId = dayRes.json().id;
+  const mark = (payload) => call('PUT', `/api/days/${dayId}/trip-mark`, at, payload);
+  assert.equal((await call('PUT', `/api/days/${dayId}/trip-mark`, wt, { started_at: 1_770_000_600_000, mode: 'normal' })).statusCode, 403);
+  assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'material' })).statusCode, 400, 'Baustelle fehlt');
+  assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'material', site_id: site.id })).statusCode, 200);
+  assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'normal' })).statusCode, 200, 'überschreibt');
+  let days = (await call('GET', `/api/days?user_id=${db.prepare('SELECT user_id FROM days WHERE id = ?').get(dayId).user_id}&from=1700000000000&to=1800000000000`, at)).json();
+  assert.deepEqual(days[0].trip_marks, [{ started_at: 1_770_000_600_000, mode: 'normal', site_id: null }]);
+  assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'auto' })).statusCode, 200);
+  days = (await call('GET', `/api/days?user_id=${db.prepare('SELECT user_id FROM days WHERE id = ?').get(dayId).user_id}&from=1700000000000&to=1800000000000`, at)).json();
+  assert.deepEqual(days[0].trip_marks, []);
+  assert.equal((await call('PUT', '/api/days/999/trip-mark', at, { started_at: 1_770_000_600_000, mode: 'normal' })).statusCode, 404);
+  assert.equal((await mark({ started_at: 5, mode: 'normal' })).statusCode, 400);
+});

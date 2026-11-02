@@ -86,6 +86,14 @@ CREATE TABLE IF NOT EXISTS segments (
   source TEXT NOT NULL DEFAULT 'manual',
   UNIQUE (day_id, client_id)
 );
+CREATE TABLE IF NOT EXISTS trip_marks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day_id INTEGER NOT NULL REFERENCES days(id),
+  started_at INTEGER NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('normal','material')),
+  site_id INTEGER REFERENCES sites(id),
+  UNIQUE (day_id, started_at)
+);
 CREATE TABLE IF NOT EXISTS points (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day_id INTEGER NOT NULL REFERENCES days(id),
@@ -106,6 +114,7 @@ export function openDb(path = ':memory:') {
   const hasColumn = (table, column) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
   if (!hasColumn('customers', 'address')) db.exec('ALTER TABLE customers ADD COLUMN address TEXT');
   if (!hasColumn('sites', 'system')) db.exec('ALTER TABLE sites ADD COLUMN system TEXT');
+  if (!hasColumn('sites', 'kind')) db.exec("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'");
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     insert.run(key, JSON.stringify(value));

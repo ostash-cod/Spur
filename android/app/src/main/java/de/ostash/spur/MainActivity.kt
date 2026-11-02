@@ -210,6 +210,8 @@ fun MainScreen() {
     var showNewSite by remember { mutableStateOf(false) }
     var confirmStart by remember { mutableStateOf<SiteRow?>(null) }
     var positionSite by remember { mutableStateOf<SiteRow?>(null) }
+    var showSaveHaendler by remember { mutableStateOf(false) }
+    var nameStop by remember { mutableStateOf<StopRow?>(null) }
 
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
@@ -221,6 +223,8 @@ fun MainScreen() {
     val segment = remember(now) { day?.let { db.openSegment(it.id) } }
     val sites = remember(now / 3000) { db.sites() }
     val currentSite = sites.find { it.id == segment?.siteId }
+    val usage = remember(now / 5000) { db.siteUsage() }
+    val stops = remember(now / 2000) { day?.let { db.pendingStops(it.id) } ?: emptyList() }
     val latestDay = remember(now / 5000) { db.latestDay() }
     val siteMap = remember(sites) { sites.associateBy { it.id } }
     val timeline = remember(now / 5000, sites) {
@@ -316,12 +320,22 @@ fun MainScreen() {
                     now = now,
                     dayInfo = day?.let { "Tag ${formatDuration(now - it.startedAt)} h · GPS-Punkte ${db.countPoints(it.id)}" },
                     sites = sites,
+                    usage = usage,
                     runningSegment = segment,
                     onSiteTap = { onSiteTap(it) },
                     isAdmin = Prefs.isAdmin(ctx),
                     onNewSite = { showNewSite = true },
+                    onSaveHaendler = { showSaveHaendler = true },
                     onSiteLongPress = { positionSite = it },
                     timeline = timeline,
+                    stops = stops,
+                    onStopPause = { st ->
+                        val cid = db.insertSegment(st.dayId, null, "break", st.startedAt, st.endedAt)
+                        db.finishStop(st.id, cid)
+                        SyncWorker.enqueue(ctx)
+                    },
+                    onStopName = { nameStop = it },
+                    onStopContinue = { st -> db.finishStop(st.id, null) },
                 )
                 1 -> PlaceholderScreen("Berichte", "Wochen- und Monatsnachweis kommen im nächsten Schritt.")
                 else -> SettingsScreen()
@@ -368,6 +382,31 @@ fun MainScreen() {
         SetPositionDialog(s, onDismiss = { positionSite = null }, onDone = { positionSite = null })
     }
 
+    if (showSaveHaendler) {
+        SaveHaendlerDialog(
+            position = db.lastPoint()?.let { Triple(it.lat, it.lng, it.acc) },
+            positionAgeMin = db.lastPoint()?.let { (System.currentTimeMillis() - it.ts) / 60_000 } ?: Long.MAX_VALUE,
+            title = "Ort hier speichern",
+            onDismiss = { showSaveHaendler = false },
+            onSaved = { showSaveHaendler = false },
+        )
+    }
+
+    nameStop?.let { st ->
+        SaveHaendlerDialog(
+            position = Triple(st.lat, st.lng, 0f),
+            positionAgeMin = 0,
+            title = "Ort benennen",
+            onDismiss = { nameStop = null },
+            onSaved = { site ->
+                val cid = db.insertSegment(st.dayId, site.id, "work", st.startedAt, st.endedAt)
+                db.finishStop(st.id, cid)
+                nameStop = null
+                SyncWorker.enqueue(ctx)
+            },
+        )
+    }
+
     if (showNewSite) {
         NewSiteDialog(onDismiss = { showNewSite = false }, onCreated = { showNewSite = false })
     }
@@ -388,6 +427,17 @@ fun MainScreen() {
     }
 }
 
+/** Reihenfolge der Kacheln: laufender Ort, dann die zuletzt benutzten, dann die am häufigsten benutzten, dann der Rest nach Name. */
+fun orderSites(sites: List<SiteRow>, usage: Map<Long, Pair<Long, Int>>, runningId: Long?): List<SiteRow> {
+    val running = sites.filter { it.id == runningId }
+    val rest = sites.filter { it.id != runningId }
+    val recent = rest.filter { usage[it.id] != null }.sortedByDescending { usage[it.id]!!.first }.take(3)
+    val remaining = rest.filter { it !in recent }
+    val frequent = remaining.filter { usage[it.id] != null }.sortedByDescending { usage[it.id]!!.second }
+    val others = remaining.filter { usage[it.id] == null }.sortedWith(compareBy({ it.system != null }, { it.name.lowercase() }))
+    return running + recent + frequent + others
+}
+
 @Composable
 fun TodayScreen(
     running: Boolean,
@@ -397,15 +447,28 @@ fun TodayScreen(
     now: Long,
     dayInfo: String?,
     sites: List<SiteRow>,
+    usage: Map<Long, Pair<Long, Int>>,
     runningSegment: SegmentRow?,
     onSiteTap: (SiteRow) -> Unit,
     isAdmin: Boolean,
     onNewSite: () -> Unit,
+    onSaveHaendler: () -> Unit,
     onSiteLongPress: (SiteRow) -> Unit,
     timeline: List<TimelineBlock>,
+    stops: List<StopRow>,
+    onStopPause: (StopRow) -> Unit,
+    onStopName: (StopRow) -> Unit,
+    onStopContinue: (StopRow) -> Unit,
 ) {
     val ctx = LocalContext.current
     val lastSync = Prefs.lastSync(ctx)
+    var query by remember { mutableStateOf("") }
+    val runningId = runningSegment?.siteId
+    val ordered = remember(sites, usage, runningId) { orderSites(sites, usage, runningId) }
+    val q = query.trim().lowercase()
+    val shown = if (q.isEmpty()) ordered else ordered.filter { it.name.lowercase().contains(q) || (it.customerName ?: "").lowercase().contains(q) }
+    val baustellen = shown.filter { it.kind != "haendler" }
+    val haendler = shown.filter { it.kind == "haendler" }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -435,19 +498,41 @@ fun TodayScreen(
             fontSize = 14.sp,
         )
 
-        Text("Baustellen", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        for (stop in stops) {
+            StopCard(stop, onStopPause, onStopName, onStopContinue)
+        }
+
+        if (timeline.isNotEmpty()) {
+            Text("Mein Tag", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            DayTimeline(timeline)
+        }
+
+        Text("Baustellen", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+        if (sites.size > 8) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Suchen") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+            )
+        }
         if (sites.isEmpty()) {
             Text(
                 "Noch keine Baustellen. Lege sie am Desktop unter „Kunden und Projekte“ an. Sie erscheinen hier nach dem nächsten Abgleich.",
                 color = Color(0xFF6A6F75),
             )
         }
-        for (site in sites) {
+        if (q.isNotEmpty() && shown.isEmpty()) Text("Nichts gefunden.", color = Color(0xFF6A6F75))
+        for (site in baustellen) {
             SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
         }
-        if (timeline.isNotEmpty()) {
-            Text("Mein Tag", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
-            DayTimeline(timeline)
+        if (haendler.isNotEmpty()) {
+            Text("Händler", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            for (site in haendler) {
+                SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
+            }
         }
         if (isAdmin) {
             Text("Tipp: Kachel lange drücken = Position der Baustelle auf deinen jetzigen Standort setzen.", color = Color(0xFF6A6F75), fontSize = 13.sp)
@@ -455,7 +540,30 @@ fun TodayScreen(
                 Text("Neue Baustelle hier anlegen")
             }
         }
+        OutlinedButton(onClick = onSaveHaendler, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Text("Ort hier speichern (zum Beispiel Händler)")
+        }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** Nachfrage nach einem Halt an einem unbekannten Ort. */
+@Composable
+fun StopCard(stop: StopRow, onPause: (StopRow) -> Unit, onName: (StopRow) -> Unit, onContinue: (StopRow) -> Unit) {
+    val since = timeFmt.format(Instant.ofEpochMilli(stop.startedAt))
+    val until = stop.endedAt?.let { timeFmt.format(Instant.ofEpochMilli(it)) }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0xFFFFF3C4)).border(2.dp, Color(0xFFF5C400), RoundedCornerShape(14.dp)).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Wo warst du?", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(
+            if (until == null) "Du stehst seit $since Uhr an einem unbekannten Ort." else "Du standest von $since bis $until Uhr an einem unbekannten Ort.",
+            fontSize = 14.sp,
+        )
+        Button(onClick = { onPause(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5159), contentColor = Color.White)) { Text("Pause") }
+        Button(onClick = { onName(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) { Text("Ort benennen (zum Beispiel Brillux)") }
+        OutlinedButton(onClick = { onContinue(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Weiter wie Fahrt") }
     }
 }
 
@@ -546,6 +654,83 @@ fun SetPositionDialog(site: SiteRow, onDismiss: () -> Unit, onDone: () -> Unit) 
                     }
                 },
             ) { Text("Position setzen", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
+    )
+}
+
+/** Legt einen Händler (oder anderen Ort) an der aktuellen Position an. Das darf jeder. */
+@Composable
+fun SaveHaendlerDialog(
+    position: Triple<Double, Double, Float>?,
+    positionAgeMin: Long,
+    title: String,
+    onDismiss: () -> Unit,
+    onSaved: (SiteRow) -> Unit,
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val fresh = position != null && positionAgeMin < 10
+    val accurate = position != null && (position.third == 0f || position.third <= 50f)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name, zum Beispiel Brillux") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, autoCorrectEnabled = false),
+                )
+                Text(
+                    when {
+                        position == null || !fresh -> "Kein aktueller Standort. Starte zuerst den Tag und warte kurz."
+                        !accurate -> "Der Standort ist noch zu ungenau (${position.third.toInt()} m). Warte kurz im Freien und versuche es noch einmal."
+                        else -> "Position: dein Standort, die Koordinaten werden automatisch gespeichert."
+                    },
+                    color = if (fresh && accurate) Color(0xFF6A6F75) else Rot,
+                )
+                Text("Danach erkennt die App diesen Ort selbst und fragt dort nicht mehr.", color = Color(0xFF6A6F75), fontSize = 13.sp)
+                if (error.isNotEmpty()) Text(error, color = Rot)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy && fresh && accurate && name.isNotBlank(),
+                onClick = {
+                    busy = true
+                    error = ""
+                    scope.launch {
+                        try {
+                            val o = withContext(Dispatchers.IO) {
+                                Api.post(
+                                    ctx,
+                                    "/api/sites",
+                                    JSONObject().put("name", name.trim()).put("kind", "haendler").put("lat", position!!.first).put("lng", position.second),
+                                    Prefs.token(ctx) ?: "",
+                                )
+                            }
+                            val site = SiteRow(
+                                id = o.getLong("id"), name = o.getString("name"), customerName = null, color = o.getString("color"),
+                                lat = o.optDouble("lat"), lng = o.optDouble("lng"), radius = o.optDouble("radius_m", 100.0), system = null, kind = "haendler",
+                            )
+                            withContext(Dispatchers.IO) { Db.get(ctx).upsertSite(site) }
+                            SyncWorker.enqueue(ctx)
+                            onSaved(site)
+                        } catch (e: Api.ApiException) {
+                            error = e.message ?: "Fehler"
+                        } catch (e: Exception) {
+                            error = "Keine Verbindung zum Server. Bitte später noch einmal versuchen."
+                        }
+                        busy = false
+                    }
+                },
+            ) { Text("Speichern", fontWeight = FontWeight.Bold) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
     )

@@ -62,4 +62,41 @@ class TimelineTest {
         val blocks = buildTimeline(t0, t0 + 200 * min, t0 + 200 * min, listOf(seg(1, 2, 0, 100), seg(2, 3, 90, 200)), sites)
         assertEquals(blocks[0].end, blocks[1].start)
     }
+
+    private fun haendler(id: Long, name: String) = SiteRow(id, name, null, "#8D6E63", 48.0, 11.0, 100.0, null, "haendler")
+
+    @Test
+    fun fahrtZumHaendlerUndZurueckZurSelbenBaustelleIstMaterialfahrt() {
+        val sites = mapOf(2L to site(2, "Lilienstraße 77"), 9L to haendler(9, "Brillux"))
+        val segs = listOf(seg(1, 2, 0, 100), seg(2, 9, 125, 145), seg(3, 2, 170, 300))
+        val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, segs, sites)
+        assertEquals(listOf("Lilienstraße 77", "Fahrt", "Brillux", "Fahrt", "Lilienstraße 77"), blocks.map { it.label })
+        assertEquals(listOf(null, "Lilienstraße 77", "Lilienstraße 77", "Lilienstraße 77", null), blocks.map { it.stripeFor })
+        assertTrue(blocks[2].isHaendler)
+    }
+
+    @Test
+    fun fahrtZuEinerAnderenBaustelleHatKeineStreifen() {
+        val sites = mapOf(2L to site(2, "A"), 3L to site(3, "B"))
+        val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, listOf(seg(1, 2, 0, 100), seg(2, 3, 150, 300)), sites)
+        assertTrue(blocks.all { it.stripeFor == null })
+    }
+
+    @Test
+    fun pauseUnterwegsBleibtGrauAberDieFahrtDavorUndDanachHatStreifen() {
+        val sites = mapOf(2L to site(2, "A"))
+        val pause = SegmentRow(5, 1, "c5", null, "break", t0 + 130 * min, t0 + 150 * min, "manual")
+        val segs = listOf(seg(1, 2, 0, 100), pause, seg(3, 2, 190, 300))
+        val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, segs, sites)
+        assertEquals(listOf("A", "Fahrt", "Pause", "Fahrt", "A"), blocks.map { it.label })
+        assertEquals(listOf(null, "A", null, "A", null), blocks.map { it.stripeFor })
+    }
+
+    @Test
+    fun lagerZwischenZweiFahrtenIstKeineMaterialfahrt() {
+        val lager = SiteRow(7, "Lager", null, "#546E7A", 48.0, 11.0, 100.0, "lager")
+        val sites = mapOf(2L to site(2, "A"), 7L to lager)
+        val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, listOf(seg(1, 2, 0, 100), seg(2, 7, 130, 150), seg(3, 2, 180, 300)), sites)
+        assertTrue(blocks.all { it.stripeFor == null })
+    }
 }

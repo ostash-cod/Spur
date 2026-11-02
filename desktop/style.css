@@ -108,3 +108,7 @@ dialog[open] { margin: 4vh auto auto; }
 details summary { cursor: pointer; color: var(--text-leise); padding: 4px 0; }
 .timeline .block { line-height: 1.1; padding-top: 1px; padding-bottom: 1px; }
 .timeline .block strong { font-size: 0.92rem; }
+
+.timeline .block.clickable { cursor: pointer; }
+.timeline .block.clickable:hover { outline: 2px solid #1B1C1E; }
+.timeline .block.striped strong, .timeline .block.striped .small { background: rgba(245, 196, 0, 0.92); color: #1B1C1E; padding: 0 5px; border-radius: 4px; width: fit-content; }

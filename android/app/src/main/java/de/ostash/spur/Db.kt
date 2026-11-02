@@ -27,6 +27,19 @@ data class SiteRow(
     val lng: Double?,
     val radius: Double,
     val system: String?,
+    val kind: String = "baustelle",
+)
+
+/** Ein Halt an einem unbekannten Ort. Die App fragt, was das war (Pause, Händler, einfach weiter). */
+data class StopRow(
+    val id: Long,
+    val dayId: Long,
+    val lat: Double,
+    val lng: Double,
+    val startedAt: Long,
+    val endedAt: Long?,
+    val state: String, // 'pending' oder 'done'
+    val segClientId: String?,
 )
 
 data class SegmentRow(
@@ -44,7 +57,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 3) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -80,7 +93,19 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                 lat REAL,
                 lng REAL,
                 radius REAL NOT NULL,
-                system TEXT)""",
+                system TEXT,
+                kind TEXT NOT NULL DEFAULT 'baustelle')""",
+        )
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS stops (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day_id INTEGER NOT NULL,
+                lat REAL NOT NULL,
+                lng REAL NOT NULL,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                state TEXT NOT NULL DEFAULT 'pending',
+                seg_client_id TEXT)""",
         )
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS segments (
@@ -99,6 +124,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createSiteTables(db)
         if (oldVersion in 2..2) db.execSQL("ALTER TABLE sites ADD COLUMN system TEXT")
+        if (oldVersion in 2..3) db.execSQL("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'")
+        if (oldVersion < 4) createSiteTables(db)
     }
 
     private fun day(c: Cursor) = DayRow(
@@ -215,6 +242,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                     if (s.lng != null) put("lng", s.lng) else putNull("lng")
                     put("radius", s.radius)
                     put("system", s.system)
+                    put("kind", s.kind)
                 }
                 db.insert("sites", null, cv)
             }
@@ -226,7 +254,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
 
     fun sites(): List<SiteRow> =
         readableDatabase.rawQuery(
-            "SELECT id, name, customer_name, color, lat, lng, radius, system FROM sites ORDER BY (system IS NOT NULL), name COLLATE NOCASE",
+            "SELECT id, name, customer_name, color, lat, lng, radius, system, kind FROM sites ORDER BY (system IS NOT NULL), name COLLATE NOCASE",
             null,
         ).use { c ->
             buildList {
@@ -236,6 +264,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                             c.getLong(0), c.getString(1), if (c.isNull(2)) null else c.getString(2), c.getString(3),
                             if (c.isNull(4)) null else c.getDouble(4), if (c.isNull(5)) null else c.getDouble(5), c.getDouble(6),
                             if (c.isNull(7)) null else c.getString(7),
+                            c.getString(8),
                         ),
                     )
                 }
@@ -323,6 +352,85 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     fun lastPoint(): PointRow? =
         readableDatabase.rawQuery("SELECT id, ts, lat, lng, acc FROM points ORDER BY ts DESC LIMIT 1", null)
             .use { c -> if (c.moveToFirst()) PointRow(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4)) else null }
+
+    // --- Halte an unbekannten Orten ---
+    private fun stop(c: Cursor) = StopRow(
+        id = c.getLong(0), dayId = c.getLong(1), lat = c.getDouble(2), lng = c.getDouble(3), startedAt = c.getLong(4),
+        endedAt = if (c.isNull(5)) null else c.getLong(5), state = c.getString(6), segClientId = if (c.isNull(7)) null else c.getString(7),
+    )
+    private val stopColumns = "id, day_id, lat, lng, started_at, ended_at, state, seg_client_id"
+
+    @Synchronized
+    fun addStop(dayId: Long, lat: Double, lng: Double, startedAt: Long): Long {
+        val cv = ContentValues().apply {
+            put("day_id", dayId); put("lat", lat); put("lng", lng); put("started_at", startedAt)
+        }
+        return writableDatabase.insertOrThrow("stops", null, cv)
+    }
+
+    fun pendingStops(dayId: Long): List<StopRow> =
+        readableDatabase.rawQuery("SELECT $stopColumns FROM stops WHERE day_id = ? AND state = 'pending' ORDER BY started_at", arrayOf(dayId.toString()))
+            .use { c -> buildList { while (c.moveToNext()) add(stop(c)) } }
+
+    fun latestStop(dayId: Long): StopRow? =
+        readableDatabase.rawQuery("SELECT $stopColumns FROM stops WHERE day_id = ? ORDER BY started_at DESC LIMIT 1", arrayOf(dayId.toString()))
+            .use { if (it.moveToFirst()) stop(it) else null }
+
+    @Synchronized
+    fun endStop(id: Long, endedAt: Long) {
+        writableDatabase.execSQL("UPDATE stops SET ended_at = ? WHERE id = ? AND ended_at IS NULL", arrayOf<Any>(endedAt, id))
+    }
+
+    @Synchronized
+    fun finishStop(id: Long, segClientId: String?) {
+        val cv = ContentValues().apply {
+            put("state", "done")
+            if (segClientId != null) put("seg_client_id", segClientId)
+        }
+        writableDatabase.update("stops", cv, "id = ?", arrayOf(id.toString()))
+    }
+
+    /** Legt einen Abschnitt an (zum Beispiel Pause oder Händler) und beendet davor einen laufenden, der früher begann. */
+    @Synchronized
+    fun insertSegment(dayId: Long, siteId: Long?, kind: String, startedAt: Long, endedAt: Long?, source: String = "manual"): String {
+        val open = openSegment(dayId)
+        if (open != null && open.startedAt <= startedAt) endOpenSegment(dayId, startedAt)
+        val clientId = UUID.randomUUID().toString()
+        val cv = ContentValues().apply {
+            put("day_id", dayId)
+            put("client_id", clientId)
+            if (siteId != null) put("site_id", siteId) else putNull("site_id")
+            put("kind", kind)
+            put("started_at", startedAt)
+            if (endedAt != null) put("ended_at", endedAt) else putNull("ended_at")
+            put("source", source)
+        }
+        writableDatabase.insertOrThrow("segments", null, cv)
+        return clientId
+    }
+
+    @Synchronized
+    fun endSegmentByClientId(dayId: Long, clientId: String, endedAt: Long) {
+        val cv = ContentValues().apply { put("ended_at", endedAt); put("dirty", 1) }
+        writableDatabase.update("segments", cv, "day_id = ? AND client_id = ? AND ended_at IS NULL", arrayOf(dayId.toString(), clientId))
+    }
+
+    /** Neuer Ort (zum Beispiel Händler), sofort lokal bekannt, bevor der nächste Abgleich läuft. */
+    @Synchronized
+    fun upsertSite(s: SiteRow) {
+        val cv = ContentValues().apply {
+            put("id", s.id); put("name", s.name); put("customer_name", s.customerName); put("color", s.color)
+            if (s.lat != null) put("lat", s.lat) else putNull("lat")
+            if (s.lng != null) put("lng", s.lng) else putNull("lng")
+            put("radius", s.radius); put("system", s.system); put("kind", s.kind)
+        }
+        writableDatabase.insertWithOnConflict("sites", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** Wann und wie oft ein Ort benutzt wurde (für die Sortierung der Kacheln). */
+    fun siteUsage(): Map<Long, Pair<Long, Int>> =
+        readableDatabase.rawQuery("SELECT site_id, MAX(started_at), COUNT(*) FROM segments WHERE site_id IS NOT NULL GROUP BY site_id", null)
+            .use { c -> buildMap { while (c.moveToNext()) put(c.getLong(0), c.getLong(1) to c.getInt(2)) } }
 
     companion object {
         @Volatile private var instance: Db? = null

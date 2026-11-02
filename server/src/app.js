@@ -324,7 +324,34 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl } = {}
       .all(userId, from, to);
     const pointStmt = db.prepare('SELECT ts, lat, lng, acc FROM points WHERE day_id = ? ORDER BY ts');
     const segStmt = db.prepare('SELECT client_id, site_id, kind, started_at, ended_at, source FROM segments WHERE day_id = ? ORDER BY started_at');
-    return days.map((d) => ({ ...d, points: pointStmt.all(d.id), segments: segStmt.all(d.id) }));
+    const markStmt = db.prepare('SELECT started_at, mode, site_id FROM trip_marks WHERE day_id = ? ORDER BY started_at');
+    return days.map((d) => ({ ...d, points: pointStmt.all(d.id), segments: segStmt.all(d.id), trip_marks: markStmt.all(d.id) }));
+  });
+
+  // Eine Fahrt am Desktop ändern: Streifen (Materialfahrt) wegnehmen oder einer anderen Baustelle zuordnen.
+  // mode: 'normal' = normale Fahrt, 'material' = Materialfahrt für site_id, 'auto' = zurück auf die automatische Erkennung.
+  app.put('/api/days/:id/trip-mark', { preHandler: requireAdmin }, async (req, reply) => {
+    const day = db.prepare('SELECT id FROM days WHERE id = ?').get(Number(req.params.id));
+    if (!day) return reply.code(404).send({ error: 'Tag nicht gefunden' });
+    const b = req.body ?? {};
+    if (!validTs(b.started_at)) return reply.code(400).send({ error: 'Startzeit der Fahrt ungültig' });
+    if (!['normal', 'material', 'auto'].includes(b.mode)) return reply.code(400).send({ error: 'Art ungültig' });
+    if (b.mode === 'auto') {
+      db.prepare('DELETE FROM trip_marks WHERE day_id = ? AND started_at = ?').run(day.id, b.started_at);
+      return { ok: true };
+    }
+    let siteId = null;
+    if (b.mode === 'material') {
+      siteId = Number(b.site_id);
+      if (!db.prepare("SELECT 1 FROM sites WHERE id = ? AND kind = 'baustelle'").get(siteId)) {
+        return reply.code(400).send({ error: 'Baustelle nicht gefunden' });
+      }
+    }
+    db.prepare(
+      `INSERT INTO trip_marks (day_id, started_at, mode, site_id) VALUES (?, ?, ?, ?)
+       ON CONFLICT(day_id, started_at) DO UPDATE SET mode = excluded.mode, site_id = excluded.site_id`,
+    ).run(day.id, b.started_at, b.mode, siteId);
+    return { ok: true };
   });
 
   registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });
