@@ -29,6 +29,7 @@ fun distanceMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Doub
  *
  * - Ankunft: Der Punkt liegt im Radius und bleibt dort mindestens [Place.dwellMs]. Die Zeit zählt ab dem ersten Punkt im Radius.
  * - Abfahrt: Der Standort ist länger als [leaveDebounceMs] außerhalb von Radius + [leaveMarginM]. Die Zeit zählt bis zum letzten Punkt im Radius.
+ * - Kurze Ausreißer nach außen (bis [candidateGraceMs]) unterbrechen das Warten auf die Ankunft nicht.
  * - Ungenaue Punkte (schlechter als [maxAccuracyM]) werden ignoriert.
  */
 class PlaceDetector(
@@ -36,10 +37,12 @@ class PlaceDetector(
     private val leaveMarginM: Double = 40.0,
     private val leaveDebounceMs: Long = 90_000,
     private val maxAccuracyM: Float = 100f,
+    private val candidateGraceMs: Long = 90_000,
 ) {
     private var current: Place? = null
     private var candidate: Place? = null
     private var candidateSince = 0L
+    private var candidateLastIn = 0L
     private var outsideSince: Long? = null
     private var lastInsideTs = 0L
 
@@ -71,13 +74,15 @@ class PlaceDetector(
             .minByOrNull { it.second }
             ?.first
         if (inside == null) {
-            candidate = null
+            // Ein einzelner Ausreißer (GPS springt im Haus oder hinter Metall) setzt das Warten nicht zurück.
+            if (candidate != null && f.ts - candidateLastIn > candidateGraceMs) candidate = null
             return events
         }
         if (candidate?.siteId != inside.siteId) {
             candidate = inside
             candidateSince = f.ts
         }
+        candidateLastIn = f.ts
         if (f.ts - candidateSince >= inside.dwellMs) {
             events += PlaceEvent.Arrive(inside.siteId, candidateSince)
             current = inside

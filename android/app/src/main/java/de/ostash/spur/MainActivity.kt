@@ -208,6 +208,7 @@ fun MainScreen() {
     var pendingSite by remember { mutableStateOf<Long?>(null) }
     var confirmEndSite by remember { mutableStateOf<SiteRow?>(null) }
     var showNewSite by remember { mutableStateOf(false) }
+    var confirmStart by remember { mutableStateOf<SiteRow?>(null) }
     var positionSite by remember { mutableStateOf<SiteRow?>(null) }
 
     val now by produceState(System.currentTimeMillis()) {
@@ -261,12 +262,8 @@ fun MainScreen() {
 
     fun onSiteTap(site: SiteRow) {
         when {
-            day == null -> startDay(site.id)
             segment?.siteId == site.id -> confirmEndSite = site
-            else -> {
-                db.switchSite(day.id, site.id, System.currentTimeMillis())
-                SyncWorker.enqueue(ctx)
-            }
+            else -> confirmStart = site // immer nachfragen, damit nichts versehentlich in der Tasche passiert
         }
     }
 
@@ -345,6 +342,25 @@ fun MainScreen() {
                 }) { Text("Ja, beenden", color = Rot, fontWeight = FontWeight.Bold) }
             },
             dismissButton = { TextButton(onClick = { confirmEndSite = null }) { Text("Abbrechen") } },
+        )
+    }
+
+    confirmStart?.let { site ->
+        AlertDialog(
+            onDismissRequest = { confirmStart = null },
+            title = { Text("${site.name} starten?") },
+            text = { Text(if (day == null) "Der Tag beginnt mit dieser Auswahl." else "Die Arbeit wechselt jetzt zu ${site.name}.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStart = null
+                    if (day == null) startDay(site.id)
+                    else {
+                        db.switchSite(day.id, site.id, System.currentTimeMillis())
+                        SyncWorker.enqueue(ctx)
+                    }
+                }) { Text("Ja, starten", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { confirmStart = null }) { Text("Abbrechen") } },
         )
     }
 
@@ -619,6 +635,7 @@ fun SettingsScreen() {
     ) {
         Text("Einstellungen", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Text("Angemeldet als $name")
+        Text("Version ${runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrDefault("?")}", fontWeight = FontWeight.Bold)
         Text("Server: $server", color = Color(0xFF6A6F75), fontSize = 13.sp)
 
         Text("Standort", fontWeight = FontWeight.Bold)

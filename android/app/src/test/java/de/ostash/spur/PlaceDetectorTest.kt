@@ -106,4 +106,19 @@ class PlaceDetectorTest {
         val d = distanceMeters(48.0, 11.0, 48.001, 11.0)
         assertEquals(111.2, d, 0.5)
     }
+
+    @Test
+    fun kurzerAusreisserSetztDasWartenNichtZurueck() {
+        val d = PlaceDetector(listOf(site))
+        // 30 s im Radius, ein Ausreißer (GPS springt), danach weiter im Radius -> Ankunft ab erstem Punkt
+        val events = run(d, listOf(fix(0, 50), fix(30, 60), fix(45, 400), fix(60, 55), fix(125, 40), fix(130, 40)))
+        assertEquals(listOf<PlaceEvent>(PlaceEvent.Arrive(1, 0)), events)
+    }
+
+    @Test
+    fun langeZeitAusserhalbSetztDasWartenZurueck() {
+        val d = PlaceDetector(listOf(site))
+        val events = run(d, listOf(fix(0, 50), fix(30, 400), fix(150, 400), fix(160, 50), fix(200, 50)))
+        assertTrue(events.isEmpty())
+    }
 }
