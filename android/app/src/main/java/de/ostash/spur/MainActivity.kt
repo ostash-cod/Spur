@@ -213,6 +213,11 @@ fun MainScreen() {
     var showSaveHaendler by remember { mutableStateOf(false) }
     var nameStop by remember { mutableStateOf<StopRow?>(null) }
 
+    // Läuft ein Tag, aber der Aufzeichnungsdienst wurde beendet (Update, Neustart, Energiesparen), startet er wieder, sobald die App geöffnet wird.
+    LaunchedEffect(Unit) {
+        if (db.openDay() != null && hasFineLocation(ctx)) TrackingService.start(ctx)
+    }
+
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
             delay(1000)
