@@ -20,6 +20,7 @@ object Prefs {
     fun userName(c: Context): String = sp(c).getString("name", "") ?: ""
     fun usesPrivateCar(c: Context): Boolean = sp(c).getBoolean("car", false)
     fun isAdmin(c: Context): Boolean = sp(c).getBoolean("admin", false)
+    fun setAdmin(c: Context, admin: Boolean) { sp(c).edit().putBoolean("admin", admin).apply() }
     fun lastSync(c: Context): Long = sp(c).getLong("last_sync", 0L)
 
     fun setLastSync(c: Context, ts: Long) = sp(c).edit().putLong("last_sync", ts).apply()

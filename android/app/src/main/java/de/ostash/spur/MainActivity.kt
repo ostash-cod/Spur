@@ -232,6 +232,12 @@ fun MainScreen() {
     LaunchedEffect(Unit) {
         if (db.openDay() != null && hasFineLocation(ctx)) TrackingService.start(ctx)
     }
+    // Chef-Status beim Start vom Server holen (wer sich früher angemeldet hat, hat ihn vielleicht nicht gespeichert).
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            runCatching { Prefs.setAdmin(ctx, Api.get(ctx, "/api/me", Prefs.token(ctx) ?: "").optString("role") == "admin") }
+        }
+    }
     // Beim Start nachsehen, ob es eine neuere App gibt (ohne Meldung, wenn kein Internet da ist).
     LaunchedEffect(Unit) {
         update = withContext(Dispatchers.IO) { runCatching { Updater.check(ctx) }.getOrNull() }

@@ -23,6 +23,8 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
         val token = Prefs.token(ctx) ?: return@withContext Result.success()
         val db = Db.get(ctx)
         try {
+            // Wer bin ich? (Der Chef-Status steht auf dem Server und kann sich seit der Anmeldung geändert haben.)
+            runCatching { Prefs.setAdmin(ctx, Api.get(ctx, "/api/me", token).optString("role") == "admin") }
             // Aktuelle Baustellen vom Server holen (für die Kacheln).
             val sites = Api.getArray(ctx, "/api/sites", token)
             db.replaceSites(
