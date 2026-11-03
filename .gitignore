@@ -7,3 +7,4 @@ android/local.properties
 *.apk
 *.zip
 .DS_Store
+!apk/spur.apk
