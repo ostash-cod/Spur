@@ -36,7 +36,15 @@ let srv;
   console.log('Händler in der Liste:', (await page.locator('.card', { hasText: 'Händler (Baumarkt' }).locator('tbody tr').allInnerTexts()).map((x) => x.replace(/\s+/g, ' ')).join(' | '));
   await page.click('button:has-text("Neuer Händler")'); await page.waitForSelector('dialog[open] h2:has-text("Neuer Händler")');
   console.log('Händler-Dialog ohne Kunde:', (await page.locator('dialog[open] #s-cust').count()) === 0);
-  await page.click('dialog[open] button:has-text("Abbrechen")');
+  // Art wechseln: Händler -> Baustelle, Name bleibt, Kunde-Feld erscheint
+  await page.fill('dialog[open] #s-name', 'Feichtetstr. 1 Pöcking');
+  await page.selectOption('dialog[open] #s-kind', 'baustelle');
+  await page.waitForSelector('dialog[open] #s-cust');
+  console.log('Art gewechselt, Name bleibt:', await page.inputValue('dialog[open] #s-name'), '| Titel:', await page.textContent('dialog[open] h2'));
+  await page.fill('dialog[open] #s-lat', '47,965'); await page.fill('dialog[open] #s-lng', '11,312');
+  await page.click('dialog[open] button:has-text("Speichern")');
+  await page.waitForFunction(() => [...document.querySelectorAll('.card')].some((c) => c.textContent.includes('Baustellen') && c.textContent.includes('Feichtetstr. 1 Pöcking')));
+  console.log('Neue Baustelle steht in der Baustellen-Tabelle: ok');
 
   await page.click('a[data-page=mitarbeiter]'); await page.click('a[href^="#/mitarbeiter/"]:has-text("Mykhaylo")'); await page.waitForSelector('.timeline .block');
   const stripes = async () => page.locator('.timeline .block.striped').count();

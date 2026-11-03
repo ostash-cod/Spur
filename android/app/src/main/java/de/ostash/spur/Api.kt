@@ -16,6 +16,38 @@ object Api {
     fun post(ctx: Context, path: String, body: JSONObject, token: String): JSONObject =
         JSONObject(raw(ctx, "POST", path, body, token).ifBlank { "{}" })
 
+    fun get(ctx: Context, path: String, token: String?): JSONObject =
+        JSONObject(raw(ctx, "GET", path, null, token).ifBlank { "{}" })
+
+    /** Lädt eine Datei vom Server in [target]. [onProgress] bekommt die Prozent (0 bis 100). */
+    fun download(ctx: Context, path: String, target: java.io.File, onProgress: (Int) -> Unit = {}) {
+        val base = Prefs.serverUrl(ctx)
+        if (base.isEmpty()) throw ApiException(0, "Serveradresse fehlt")
+        val conn = URL(base + path).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 60_000
+            if (conn.responseCode !in 200..299) throw ApiException(conn.responseCode, "Fehler ${conn.responseCode} beim Herunterladen")
+            val total = conn.contentLengthLong
+            target.parentFile?.mkdirs()
+            conn.inputStream.use { input ->
+                target.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    var done = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        done += n
+                        if (total > 0) onProgress((done * 100 / total).toInt())
+                    }
+                }
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     fun getArray(ctx: Context, path: String, token: String): JSONArray =
         JSONArray(raw(ctx, "GET", path, null, token).ifBlank { "[]" })
 

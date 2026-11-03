@@ -1,4 +1,7 @@
 import Fastify from 'fastify';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import { registerSiteRoutes } from './sites.js';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
@@ -65,7 +68,8 @@ function positiveNumber(label) {
   };
 }
 
-export async function buildApp({ db, staticDir, logger = false, fetchImpl } = {}) {
+export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDir } = {}) {
+  const APK_DIR = apkDir ?? process.env.SPUR_APK_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'apk');
   // Hinter dem Webserver (Caddy) kommt die echte Adresse des Handys im Kopf der Anfrage.
   const app = Fastify({ logger, trustProxy: process.env.SPUR_TRUST_PROXY === '1' });
   const failedLogins = new Map(); // ip -> [Zeitstempel]
@@ -352,6 +356,26 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl } = {}
        ON CONFLICT(day_id, started_at) DO UPDATE SET mode = excluded.mode, site_id = excluded.site_id`,
     ).run(day.id, b.started_at, b.mode, siteId);
     return { ok: true };
+  });
+
+  // App-Update: Die Handy-App fragt hier nach der neuesten Version und lädt die Datei selbst herunter.
+  app.get('/api/app-version', async (req, reply) => {
+    const file = join(APK_DIR, 'version.json');
+    if (!existsSync(file) || !existsSync(join(APK_DIR, 'spur.apk'))) return reply.code(404).send({ error: 'Keine App-Datei hinterlegt' });
+    try {
+      const v = JSON.parse(readFileSync(file, 'utf8'));
+      return { versionCode: Number(v.versionCode), versionName: String(v.versionName), size: statSync(join(APK_DIR, 'spur.apk')).size };
+    } catch {
+      return reply.code(500).send({ error: 'Versionsdatei unlesbar' });
+    }
+  });
+  app.get('/api/app.apk', async (req, reply) => {
+    const file = join(APK_DIR, 'spur.apk');
+    if (!existsSync(file)) return reply.code(404).send({ error: 'Keine App-Datei hinterlegt' });
+    reply.header('Content-Type', 'application/vnd.android.package-archive');
+    reply.header('Content-Length', statSync(file).size);
+    reply.header('Content-Disposition', 'attachment; filename="spur.apk"');
+    return reply.send(createReadStream(file));
   });
 
   registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });

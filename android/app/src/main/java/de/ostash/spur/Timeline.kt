@@ -60,7 +60,7 @@ fun buildTimeline(
     sites: Map<Long, SiteRow>,
 ): List<TimelineBlock> {
     val end = dayEnd ?: now
-    val segs = segments.sortedBy { it.startedAt }
+    val segs = segments.filter { it.kind != "travel" }.sortedBy { it.startedAt } // „Weiter wie Fahrt“ zählt einfach als Fahrt
     val out = mutableListOf<TimelineBlock>()
     var cursor = dayStart
     for (s in segs) {

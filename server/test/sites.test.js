@@ -327,3 +327,40 @@ test('Fahrt-Markierung: Materialfahrt einer Baustelle zuordnen, Streifen wegnehm
   assert.equal((await call('PUT', '/api/days/999/trip-mark', at, { started_at: 1_770_000_600_000, mode: 'normal' })).statusCode, 404);
   assert.equal((await mark({ started_at: 5, mode: 'normal' })).statusCode, 400);
 });
+
+test('Art ändern per POST (für das Handy): nur Chef, Händler wird Baustelle mit eigener Farbe und umgekehrt', async () => {
+  const { call, at, wt } = await setup();
+  const h = (await call('POST', '/api/sites', wt, { name: 'Feichtetstr. 1', kind: 'haendler', lat: 48.0, lng: 11.3 })).json();
+  assert.equal(h.color, '#8D6E63');
+  assert.equal((await call('POST', `/api/sites/${h.id}/kind`, wt, { kind: 'baustelle' })).statusCode, 403);
+  assert.equal((await call('POST', `/api/sites/${h.id}/kind`, at, { kind: 'quatsch' })).statusCode, 400);
+  const b = (await call('POST', `/api/sites/${h.id}/kind`, at, { kind: 'baustelle' })).json();
+  assert.equal(b.kind, 'baustelle');
+  assert.notEqual(b.color, '#8D6E63');
+  const back = (await call('POST', `/api/sites/${h.id}/kind`, at, { kind: 'haendler' })).json();
+  assert.equal(back.kind, 'haendler');
+  assert.equal(back.color, '#8D6E63');
+  const sys = (await call('GET', '/api/sites?all=1', at)).json().find((s) => s.system);
+  assert.equal((await call('POST', `/api/sites/${sys.id}/kind`, at, { kind: 'haendler' })).statusCode, 400);
+  assert.equal((await call('POST', '/api/sites/999/kind', at, { kind: 'haendler' })).statusCode, 404);
+});
+
+test('App-Update: Version und Datei werden ausgeliefert, ohne Datei 404', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'spur-apk-'));
+  const db = openDb(':memory:');
+  const none = await buildApp({ db, apkDir: join(dir, 'gibtsnicht') });
+  assert.equal((await none.inject({ method: 'GET', url: '/api/app-version' })).statusCode, 404);
+  assert.equal((await none.inject({ method: 'GET', url: '/api/app.apk' })).statusCode, 404);
+  writeFileSync(join(dir, 'spur.apk'), 'PK-testdatei');
+  writeFileSync(join(dir, 'version.json'), JSON.stringify({ versionCode: 8, versionName: '0.7.0' }));
+  const app = await buildApp({ db, apkDir: dir });
+  const v = (await app.inject({ method: 'GET', url: '/api/app-version' })).json();
+  assert.deepEqual(v, { versionCode: 8, versionName: '0.7.0', size: 12 });
+  const f = await app.inject({ method: 'GET', url: '/api/app.apk' });
+  assert.equal(f.statusCode, 200);
+  assert.equal(f.headers['content-type'], 'application/vnd.android.package-archive');
+  assert.equal(f.body, 'PK-testdatei');
+});

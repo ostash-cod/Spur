@@ -432,6 +432,47 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         readableDatabase.rawQuery("SELECT site_id, MAX(started_at), COUNT(*) FROM segments WHERE site_id IS NOT NULL GROUP BY site_id", null)
             .use { c -> buildMap { while (c.moveToNext()) put(c.getLong(0), c.getLong(1) to c.getInt(2)) } }
 
+    // --- Halte ändern und Tage nach Datum ---
+    fun daysOnDate(fromMs: Long, toMs: Long): List<DayRow> =
+        readableDatabase.rawQuery("SELECT $dayColumns FROM days WHERE started_at >= ? AND started_at < ? ORDER BY started_at", arrayOf(fromMs.toString(), toMs.toString()))
+            .use { c -> buildList { while (c.moveToNext()) add(day(c)) } }
+
+    fun stopsOfDay(dayId: Long): List<StopRow> =
+        readableDatabase.rawQuery("SELECT $stopColumns FROM stops WHERE day_id = ? ORDER BY started_at", arrayOf(dayId.toString()))
+            .use { c -> buildList { while (c.moveToNext()) add(stop(c)) } }
+
+    fun segmentByClientId(clientId: String): SegmentRow? =
+        readableDatabase.rawQuery("SELECT $segmentColumns FROM segments WHERE client_id = ?", arrayOf(clientId))
+            .use { if (it.moveToFirst()) segment(it) else null }
+
+    @Synchronized
+    fun updateSegment(clientId: String, kind: String, siteId: Long?) {
+        val cv = ContentValues().apply {
+            put("kind", kind)
+            if (siteId != null) put("site_id", siteId) else putNull("site_id")
+            put("dirty", 1)
+        }
+        writableDatabase.update("segments", cv, "client_id = ?", arrayOf(clientId))
+    }
+
+    /**
+     * Antwort auf einen Halt eintragen oder ändern. [kind] ist 'break' (Pause), 'work' (Ort benannt, [siteId]) oder 'travel' (weiter wie Fahrt).
+     * Gibt es zum Halt schon einen Abschnitt, wird er geändert, sonst entsteht ein neuer.
+     */
+    @Synchronized
+    fun answerStop(stop: StopRow, kind: String, siteId: Long?) {
+        val existing = stop.segClientId
+        if (existing != null) {
+            updateSegment(existing, kind, if (kind == "work") siteId else null)
+            finishStop(stop.id, existing)
+        } else if (kind == "travel") {
+            finishStop(stop.id, null)
+        } else {
+            val cid = insertSegment(stop.dayId, if (kind == "work") siteId else null, kind, stop.startedAt, stop.endedAt)
+            finishStop(stop.id, cid)
+        }
+    }
+
     companion object {
         @Volatile private var instance: Db? = null
 

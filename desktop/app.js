@@ -526,9 +526,9 @@ function sessionStorageSet(k, v) {
   try { sessionStorage.setItem(k, v); } catch { /* ohne Speicher geht es auch */ }
 }
 
-function siteDialog(site, customers, kindArg) {
-  const s = site ?? {};
-  const kind = site?.kind ?? kindArg ?? 'baustelle';
+function siteDialog(site, customers, kindArg, draft) {
+  const s = { ...(site ?? {}), ...(draft ?? {}) };
+  const kind = kindArg ?? site?.kind ?? 'baustelle';
   const isHaendler = kind === 'haendler';
   const byId = new Map(customers.map((c) => [c.id, c]));
   const name = h('input', { id: 's-name', value: s.name ?? '', placeholder: isHaendler ? 'zum Beispiel Brillux Starnberg' : 'zum Beispiel Lilienstraße 77', style: 'max-width:none' });
@@ -626,6 +626,22 @@ function siteDialog(site, customers, kindArg) {
 
   const d = openDialog(
     h('h2', {}, isHaendler ? (site ? 'Händler bearbeiten' : 'Neuer Händler') : site ? 'Baustelle bearbeiten' : 'Neue Baustelle'),
+    h('label', { for: 's-kind' }, 'Art'),
+    h(
+      'select',
+      {
+        id: 's-kind',
+        style: 'max-width:none',
+        onchange: (e) => {
+          const draft = { name: name.value, address: addr.value, lat: num(lat.value), lng: num(lng.value) };
+          const keep = site ? { customer_id: site.customer_id } : {};
+          d.close();
+          siteDialog(site, customers, e.target.value, { ...keep, ...draft });
+        },
+      },
+      h('option', { value: 'baustelle', selected: !isHaendler }, 'Baustelle (mit Kunde, eigene Farbe)'),
+      h('option', { value: 'haendler', selected: isHaendler }, 'Händler (Baumarkt, Großhandel)'),
+    ),
     h('label', { for: 's-name' }, isHaendler ? 'Name des Händlers' : 'Name der Baustelle'),
     name,
     ...(isHaendler ? [] : [h('label', { for: 's-cust' }, 'Kunde (optional)'), cust, autoCustRow]),
@@ -800,6 +816,7 @@ function isLight(hex) {
 function buildBlocks(day, siteById) {
   const end = day.ended_at ?? Date.now();
   const segs = [...(day.segments ?? [])]
+    .filter((s) => s.kind !== 'travel') // „Weiter wie Fahrt“ am Handy: zählt einfach als Fahrt
     .sort((a, b) => a.started_at - b.started_at)
     .map((s) => ({ ...s, ended_at: s.ended_at ?? end }));
   const out = [];

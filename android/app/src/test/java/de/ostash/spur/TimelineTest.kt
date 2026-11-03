@@ -99,4 +99,14 @@ class TimelineTest {
         val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, listOf(seg(1, 2, 0, 100), seg(2, 7, 130, 150), seg(3, 2, 180, 300)), sites)
         assertTrue(blocks.all { it.stripeFor == null })
     }
+
+    @Test
+    fun weiterWieFahrtAbschnittWirdAlsFahrtGezaehlt() {
+        val sites = mapOf(2L to site(2, "A"))
+        val travel = SegmentRow(5, 1, "c5", null, "travel", t0 + 110 * min, t0 + 150 * min, "manual")
+        val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, listOf(seg(1, 2, 0, 100), travel, seg(3, 2, 190, 300)), sites)
+        assertEquals(listOf("A", "Fahrt", "A"), blocks.map { it.label })
+        assertEquals(listOf(null, "A", null), blocks.map { it.stripeFor })
+        assertEquals(90 * min, blocks[1].end - blocks[1].start)
+    }
 }
