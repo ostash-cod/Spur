@@ -349,6 +349,11 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             arrayOf(dayId.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(segment(c)) } }
 
+    /** Alle Punkte des Tages ab [fromTs], älteste zuerst. */
+    fun pointsSince(dayId: Long, fromTs: Long): List<PointRow> =
+        readableDatabase.rawQuery("SELECT id, ts, lat, lng, acc FROM points WHERE day_id = ? AND ts >= ? ORDER BY ts", arrayOf(dayId.toString(), fromTs.toString()))
+            .use { c -> buildList { while (c.moveToNext()) add(PointRow(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4))) } }
+
     fun lastPoint(): PointRow? =
         readableDatabase.rawQuery("SELECT id, ts, lat, lng, acc FROM points ORDER BY ts DESC LIMIT 1", null)
             .use { c -> if (c.moveToFirst()) PointRow(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4)) else null }

@@ -50,10 +50,34 @@ class TrackingService : Service() {
                 if (f != null && now - f.ts < STALE_FIX_MS) {
                     val fix = f.copy(ts = now)
                     handle(d.onFix(fix))
+                    checkAway(fix, d)
                     stopDetector?.onFix(fix, d.currentSiteId != null)?.let { handleStop(it) }
                 }
             }
             handler.postDelayed(this, TICK_MS)
+        }
+    }
+
+    // Von Hand gestartete (oder nach einem Neustart nicht erkannte) Baustelle: Entfernt man sich weit und lange, endet sie von selbst.
+    private var awaySince: Long? = null
+    private var awaySiteId: Long? = null
+
+    private fun checkAway(f: Fix, d: PlaceDetector) {
+        if (dayId < 0 || f.accuracy > 100f) return
+        val db = Db.get(this)
+        val open = db.openSegment(dayId)
+        val place = if (open?.kind == "work" && open.siteId != null && d.currentSiteId != open.siteId) d.places.find { it.siteId == open.siteId } else null
+        if (open == null || place == null) { awaySince = null; awaySiteId = null; return }
+        if (distanceMeters(f.lat, f.lng, place.lat, place.lng) <= place.radiusM + AWAY_EXTRA_M) { awaySince = null; awaySiteId = null; return }
+        if (awaySiteId != open.siteId) { awaySiteId = open.siteId; awaySince = f.ts }
+        val since = awaySince ?: f.ts.also { awaySince = it }
+        if (f.ts - since >= AWAY_MS) {
+            // Ende = letzter Punkt, an dem man noch bei der Baustelle war
+            val lastInside = db.pointsSince(dayId, open.startedAt)
+                .lastOrNull { it.acc <= 100f && distanceMeters(it.lat, it.lng, place.lat, place.lng) <= place.radiusM + AWAY_EXTRA_M }?.ts
+            db.endOpenSegment(dayId, maxOf(lastInside ?: since, open.startedAt))
+            awaySince = null; awaySiteId = null
+            SyncWorker.enqueue(this)
         }
     }
 
@@ -139,6 +163,7 @@ class TrackingService : Service() {
                 lastFix = fix
                 detector?.let { d ->
                     handle(d.onFix(fix))
+                    checkAway(fix, d)
                     stopDetector?.onFix(fix, d.currentSiteId != null)?.let { handleStop(it) }
                 }
             }
@@ -250,6 +275,8 @@ class TrackingService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ASK_CHANNEL = "ask"
         private const val ASK_NOTIFICATION_ID = 2
+        private const val AWAY_MS = 3 * 60_000L
+        private const val AWAY_EXTRA_M = 150.0
         private const val MERGE_GAP_MS = 5 * 60_000L
         private const val MERGE_DIST_M = 300.0
         private const val HAENDLER_MIN_RADIUS_M = 150.0
