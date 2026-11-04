@@ -853,8 +853,21 @@ function assignTrips(blocks, marks, siteById) {
     const auto = real(prev) && real(next) && prev.site.id === next.site.id ? prev.site : null;
     const key = blocks[i].start;
     const mark = marks.find((m) => m.started_at === key) ?? null;
-    const target = mark ? (mark.mode === 'material' ? siteById.get(mark.site_id) ?? null : null) : auto;
-    for (let k = i; k < j; k += 1) blocks[k].trip = { key, target, auto, mark };
+    const material = mark ? (mark.mode === 'material' ? siteById.get(mark.site_id) ?? null : null) : auto;
+    // Anfahrt: Fahrt, die bei einer Baustelle endet. Heimfahrt: Fahrt, die bei einer Baustelle beginnt und nicht an einer anderen endet.
+    const anfahrtSite = !material && !mark && real(next) ? next.site : null;
+    const heimSite = !material && !mark && !anfahrtSite && real(prev) ? prev.site : null;
+    for (let k = i; k < j; k += 1) {
+      const b = blocks[k];
+      let target = null;
+      let note = '';
+      if (material) { target = material; note = `Material für ${material.name}`; }
+      else if (b.type === 'travel' && anfahrtSite) { target = anfahrtSite; note = `Anfahrt zu ${anfahrtSite.name}`; }
+      else if (b.type === 'travel' && heimSite) { target = heimSite; note = `Heimfahrt von ${heimSite.name}`; }
+      b.trip = { key, target: material, auto, mark };
+      b.stripeTarget = target;
+      b.stripeNote = note;
+    }
     i = j;
   }
 }
@@ -877,9 +890,9 @@ function timelineView(day, siteById, onTrip) {
     prevBottom = top + height;
     const dur = fmtDuration(b.end - b.start);
     const times = `${fmtTime(b.start)} bis ${fmtTime(b.end)}`;
-    const stripe = b.trip?.target ?? null;
+    const stripe = b.stripeTarget ?? null;
     const stripeStyle = stripe ? `background:repeating-linear-gradient(135deg,#F5C400 0 12px,${stripe.color} 12px 24px);color:#1B1C1E;` : '';
-    const tripNote = stripe ? ` · Material für ${stripe.name}` : '';
+    const tripNote = stripe ? ` · ${b.stripeNote}` : '';
     const clickable = onTrip && b.trip ? { class: 'clickable', title: 'Klicken: Fahrt ändern', onclick: () => onTrip(b.trip) } : {};
     if (b.type === 'travel') {
       box.append(

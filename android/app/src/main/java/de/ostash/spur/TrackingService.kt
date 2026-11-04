@@ -62,7 +62,7 @@ class TrackingService : Service() {
             val lat = s.lat
             val lng = s.lng
             if (lat == null || lng == null) null
-            else Place(s.id, lat, lng, s.radius, if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS)
+            else Place(s.id, lat, lng, if (s.kind == "haendler") maxOf(s.radius, HAENDLER_MIN_RADIUS_M) else s.radius, if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS)
         }
 
     private fun handle(events: List<PlaceEvent>) {
@@ -89,6 +89,14 @@ class TrackingService : Service() {
             is StopEvent.Stop -> {
                 // Hat der Mitarbeiter von Hand eine Baustelle gewählt, steht er dort. Dann wird nicht gefragt.
                 if (db.openSegment(dayId)?.kind == "work") return
+                // Zwei Halte kurz nacheinander und nah beieinander (zum Beispiel Parkplatz und Markt) sind ein Besuch.
+                val last = db.latestStop(dayId)
+                if (last != null && last.state == "pending" && last.endedAt != null && e.since - last.endedAt < MERGE_GAP_MS &&
+                    distanceMeters(last.lat, last.lng, e.lat, e.lng) < MERGE_DIST_M
+                ) {
+                    db.reopenStop(last.id)
+                    return
+                }
                 db.addStop(dayId, e.lat, e.lng, e.since)
                 notifyStop(e.since)
             }
@@ -242,6 +250,9 @@ class TrackingService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ASK_CHANNEL = "ask"
         private const val ASK_NOTIFICATION_ID = 2
+        private const val MERGE_GAP_MS = 5 * 60_000L
+        private const val MERGE_DIST_M = 300.0
+        private const val HAENDLER_MIN_RADIUS_M = 150.0
         private const val INTERVAL_MS = 15_000L
         private const val MIN_DISTANCE_M = 15f
         private const val SYNC_EVERY_POINTS = 40

@@ -376,6 +376,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         readableDatabase.rawQuery("SELECT $stopColumns FROM stops WHERE day_id = ? ORDER BY started_at DESC LIMIT 1", arrayOf(dayId.toString()))
             .use { if (it.moveToFirst()) stop(it) else null }
 
+    /** Zwei Halte nah beieinander sind ein Besuch: der frühere Halt läuft einfach weiter. */
+    @Synchronized
+    fun reopenStop(id: Long) {
+        writableDatabase.execSQL("UPDATE stops SET ended_at = NULL WHERE id = ?", arrayOf<Any>(id))
+    }
+
     @Synchronized
     fun endStop(id: Long, endedAt: Long) {
         writableDatabase.execSQL("UPDATE stops SET ended_at = ? WHERE id = ? AND ended_at IS NULL", arrayOf<Any>(endedAt, id))

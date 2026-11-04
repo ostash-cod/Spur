@@ -51,18 +51,18 @@ let srv;
   console.log('Streifen-Blöcke (automatisch):', await stripes(), '| Texte:', (await page.locator('.timeline .block.striped').allInnerTexts()).map((x) => x.replace(/\s+/g, ' ')).join(' | '));
   await page.screenshot({ path: '/tmp/spur-e2e5/tag1.png', fullPage: true });
   // Klick auf die erste gestreifte Fahrt -> normale Fahrt
-  await page.locator('.timeline .block.striped').first().click();
+  await page.locator('.timeline .block.striped', { hasText: 'Material für' }).first().click();
   await page.waitForSelector('dialog[open] h2:has-text("Fahrt ändern")');
   console.log('Dialog-Text:', (await page.textContent('dialog[open] .hint')).trim());
   await page.click('dialog[open] button:has-text("Normale Fahrt")');
-  await page.waitForFunction(() => document.querySelectorAll('.timeline .block.striped').length === 0);
+  await page.waitForFunction(() => ![...document.querySelectorAll('.timeline .block.striped')].some((b) => b.textContent.includes('Material für')));
   console.log('Streifen nach „Normale Fahrt“:', await stripes());
   // Die Fahrt Lilienstraße -> Tutzing (keine Streifen) als Materialfahrt für Tutzing
-  const travel = page.locator('.timeline .block.travel', { hasText: 'Fahrt' }).last();
+  const travel = page.locator('.timeline .block.travel', { hasText: 'Anfahrt zu Tutzing' }).first();
   await travel.click(); await page.waitForSelector('dialog[open] h2:has-text("Fahrt ändern")');
   await page.selectOption('#trip-site', { label: 'Tutzing' });
   await page.click('dialog[open] button:has-text("Als Materialfahrt speichern")');
-  await page.waitForFunction(() => document.querySelectorAll('.timeline .block.striped').length > 0);
+  await page.waitForFunction(() => [...document.querySelectorAll('.timeline .block.striped')].some((b) => b.textContent.includes('Material für Tutzing')));
   console.log('Streifen nach Zuordnung zu Tutzing:', (await page.locator('.timeline .block.striped').allInnerTexts()).map((x) => x.replace(/\s+/g, ' ')).join(' | '));
   // zurück auf automatisch für die erste Gruppe
   await page.screenshot({ path: '/tmp/spur-e2e5/tag2.png', fullPage: true });

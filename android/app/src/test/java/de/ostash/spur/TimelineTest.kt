@@ -76,10 +76,19 @@ class TimelineTest {
     }
 
     @Test
-    fun fahrtZuEinerAnderenBaustelleHatKeineStreifen() {
+    fun fahrtZuEinerAnderenBaustelleIstAnfahrtZurNeuenBaustelle() {
         val sites = mapOf(2L to site(2, "A"), 3L to site(3, "B"))
         val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, listOf(seg(1, 2, 0, 100), seg(2, 3, 150, 300)), sites)
-        assertTrue(blocks.all { it.stripeFor == null })
+        assertEquals(listOf(null, "B", null), blocks.map { it.stripeFor })
+        assertEquals("Anfahrt zu B", blocks[1].stripeText)
+    }
+
+    @Test
+    fun anfahrtAmMorgenUndHeimfahrtAmAbendHabenStreifenDerBaustelle() {
+        val sites = mapOf(2L to site(2, "A"))
+        val blocks = buildTimeline(t0, t0 + 400 * min, t0 + 400 * min, listOf(seg(1, 2, 60, 300)), sites)
+        assertEquals(listOf("Anfahrt", "A", "Heimfahrt"), blocks.map { it.label })
+        assertEquals(listOf("Anfahrt zu A", null, "Heimfahrt von A"), blocks.map { it.stripeText })
     }
 
     @Test
@@ -97,7 +106,7 @@ class TimelineTest {
         val lager = SiteRow(7, "Lager", null, "#546E7A", 48.0, 11.0, 100.0, "lager")
         val sites = mapOf(2L to site(2, "A"), 7L to lager)
         val blocks = buildTimeline(t0, t0 + 300 * min, t0 + 300 * min, listOf(seg(1, 2, 0, 100), seg(2, 7, 130, 150), seg(3, 2, 180, 300)), sites)
-        assertTrue(blocks.all { it.stripeFor == null })
+        assertTrue(blocks.none { it.stripeText?.startsWith("Material") == true })
     }
 
     @Test

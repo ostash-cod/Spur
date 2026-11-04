@@ -43,6 +43,8 @@ data class TimelineBlock(
     /** Farbe der Baustelle, für die diese Fahrt (oder dieser Händler-Halt) eine Materialfahrt ist. Dann gelb mit Streifen. */
     val stripeHex: String? = null,
     val stripeFor: String? = null,
+    /** Text hinter dem Namen: „Material für X“, „Anfahrt zu X“ oder „Heimfahrt von X“. */
+    val stripeText: String? = null,
     val isHaendler: Boolean = false,
     val siteId: Long? = null,
     /** 'work', 'travel', 'break' oder 'private' */
@@ -108,7 +110,20 @@ internal fun markMaterialTrips(blocks: List<TimelineBlock>, sites: Map<Long, Sit
         if (prev != null && next != null && prev.id == next.id && prev.system == null && prev.kind != "haendler") {
             for (k in i until j) {
                 if (out[k].kind == "break" || out[k].kind == "private") continue // Pausen bleiben grau, ohne Streifen
-                out[k] = out[k].copy(stripeHex = prev.color, stripeFor = prev.name)
+                out[k] = out[k].copy(stripeHex = prev.color, stripeFor = prev.name, stripeText = "Material für ${prev.name}")
+            }
+        } else {
+            // Anfahrt: Fahrt, die bei einer Baustelle endet. Heimfahrt: Fahrt, die bei einer Baustelle beginnt und nicht an einer anderen endet.
+            val real = { r: SiteRow? -> r != null && r.system == null && r.kind != "haendler" }
+            val anfahrt = if (real(next)) next else null
+            val heim = if (anfahrt == null && real(prev)) prev else null
+            val target = anfahrt ?: heim
+            if (target != null) {
+                val text = if (anfahrt != null) "Anfahrt zu ${target.name}" else "Heimfahrt von ${target.name}"
+                for (k in i until j) {
+                    if (!out[k].isTravel) continue // nur die Fahrt selbst, Händler und Pausen bleiben wie sie sind
+                    out[k] = out[k].copy(stripeHex = target.color, stripeFor = target.name, stripeText = text)
+                }
             }
         }
         i = j
@@ -207,7 +222,7 @@ fun DayTimeline(blocks: List<TimelineBlock>) {
                     Box(Modifier.width(8.dp))
                 }
                 Column(if (stripe != null) Modifier.background(Gelb.copy(alpha = 0.92f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp) else Modifier) {
-                    Text("${b.label} · ${dur(b.end - b.start)}" + (b.stripeFor?.let { " · Material für $it" } ?: ""), color = fg, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("${b.label} · ${dur(b.end - b.start)}" + (b.stripeText?.let { " · $it" } ?: ""), color = fg, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     if (h >= 44f) {
                         Text(
                             "${hm(b.start)} bis ${hm(b.end)}" + (b.customer?.let { " · $it" } ?: "") + if (b.auto) " · automatisch" else "",
