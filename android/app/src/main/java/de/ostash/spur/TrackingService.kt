@@ -86,7 +86,17 @@ class TrackingService : Service() {
             val lat = s.lat
             val lng = s.lng
             if (lat == null || lng == null) null
-            else Place(s.id, lat, lng, if (s.system != null) s.radius else maxOf(s.radius, if (s.kind == "haendler") HAENDLER_MIN_RADIUS_M else BAUSTELLE_MIN_RADIUS_M), if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS)
+            else {
+                val baustelle = s.system == null && s.kind != "haendler"
+                Place(
+                    s.id, lat, lng,
+                    if (s.system != null) s.radius else maxOf(s.radius, if (s.kind == "haendler") HAENDLER_MIN_RADIUS_M else BAUSTELLE_MIN_RADIUS_M),
+                    if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS,
+                    // Eine Baustelle verlässt man nicht, nur weil man ums Haus fährt: weiter weg und länger draußen.
+                    leaveMarginM = if (baustelle) 120.0 else null,
+                    leaveDebounceMs = if (baustelle) 4 * 60_000L else null,
+                )
+            }
         }
 
     private fun handle(events: List<PlaceEvent>) {
@@ -97,7 +107,13 @@ class TrackingService : Service() {
             when (e) {
                 is PlaceEvent.Arrive -> {
                     if (open?.siteId == e.siteId) continue // läuft schon (zum Beispiel von Hand gestartet)
-                    db.switchSite(dayId, e.siteId, maxOf(e.at, open?.startedAt ?: e.at), "auto")
+                    // Kommt man nach kurzer Zeit zur selben Baustelle zurück (Parkplatz suchen), läuft der alte Abschnitt einfach weiter.
+                    val prev = if (open == null) db.lastEndedSegment(dayId) else null
+                    if (prev != null && prev.kind == "work" && prev.siteId == e.siteId && prev.endedAt != null && e.at - prev.endedAt < RETURN_GAP_MS) {
+                        db.reopenSegment(prev.id)
+                    } else {
+                        db.switchSite(dayId, e.siteId, maxOf(e.at, open?.startedAt ?: e.at), "auto")
+                    }
                 }
                 is PlaceEvent.Leave -> if (open?.siteId == e.siteId) db.endOpenSegment(dayId, maxOf(e.at, open.startedAt))
             }
@@ -275,6 +291,7 @@ class TrackingService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ASK_CHANNEL = "ask"
         private const val ASK_NOTIFICATION_ID = 2
+        private const val RETURN_GAP_MS = 20 * 60_000L
         private const val AWAY_MS = 3 * 60_000L
         private const val AWAY_EXTRA_M = 150.0
         private const val MERGE_GAP_MS = 5 * 60_000L

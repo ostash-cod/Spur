@@ -291,6 +291,17 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             arrayOf(dayId.toString()),
         ).use { if (it.moveToFirst()) segment(it) else null }
 
+    fun lastEndedSegment(dayId: Long): SegmentRow? =
+        readableDatabase.rawQuery(
+            "SELECT $segmentColumns FROM segments WHERE day_id = ? AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1",
+            arrayOf(dayId.toString()),
+        ).use { if (it.moveToFirst()) segment(it) else null }
+
+    @Synchronized
+    fun reopenSegment(id: Long) {
+        writableDatabase.execSQL("UPDATE segments SET ended_at = NULL, dirty = 1 WHERE id = ?", arrayOf<Any>(id))
+    }
+
     /** Beendet den laufenden Abschnitt und startet einen neuen auf der gewählten Baustelle. */
     @Synchronized
     fun switchSite(dayId: Long, siteId: Long, now: Long, source: String = "manual") {

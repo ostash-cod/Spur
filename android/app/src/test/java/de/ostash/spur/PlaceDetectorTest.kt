@@ -121,4 +121,13 @@ class PlaceDetectorTest {
         val events = run(d, listOf(fix(0, 50), fix(30, 400), fix(150, 400), fix(160, 50), fix(200, 50)))
         assertTrue(events.isEmpty())
     }
+
+    @Test
+    fun baustelleMitEigenemAbstandBleibtBeimUmsHausFahrenAktiv() {
+        val strikt = Place(1, baseLat, baseLng, 100.0, 120_000, leaveMarginM = 120.0, leaveDebounceMs = 240_000)
+        val d = PlaceDetector(listOf(strikt))
+        val events = run(d, listOf(fix(0, 20), fix(60, 20), fix(130, 20), fix(150, 200), fix(200, 215), fix(260, 215), fix(300, 30)))
+        assertEquals(listOf<PlaceEvent>(PlaceEvent.Arrive(1, 0)), events)
+        assertEquals(1L, d.currentSiteId)
+    }
 }

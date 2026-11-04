@@ -6,7 +6,16 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /** Ein bekannter Ort (Baustelle, Lager, Firma) mit Radius und Mindestdauer bis zur Erkennung. */
-data class Place(val siteId: Long, val lat: Double, val lng: Double, val radiusM: Double, val dwellMs: Long)
+data class Place(
+    val siteId: Long,
+    val lat: Double,
+    val lng: Double,
+    val radiusM: Double,
+    val dwellMs: Long,
+    /** Wenn gesetzt, gilt für diesen Ort ein eigener Abstand/eine eigene Wartezeit beim Verlassen. */
+    val leaveMarginM: Double? = null,
+    val leaveDebounceMs: Long? = null,
+)
 
 data class Fix(val ts: Long, val lat: Double, val lng: Double, val accuracy: Float)
 
@@ -55,13 +64,13 @@ class PlaceDetector(
         val cur = current
         if (cur != null) {
             val d = distanceMeters(f.lat, f.lng, cur.lat, cur.lng)
-            if (d <= cur.radiusM + leaveMarginM) {
+            if (d <= cur.radiusM + (cur.leaveMarginM ?: leaveMarginM)) {
                 outsideSince = null
                 lastInsideTs = f.ts
                 return events
             }
             val since = outsideSince ?: f.ts.also { outsideSince = it }
-            if (f.ts - since < leaveDebounceMs) return events
+            if (f.ts - since < (cur.leaveDebounceMs ?: leaveDebounceMs)) return events
             events += PlaceEvent.Leave(cur.siteId, lastInsideTs)
             current = null
             outsideSince = null

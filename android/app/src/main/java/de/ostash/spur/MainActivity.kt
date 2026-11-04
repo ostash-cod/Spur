@@ -313,6 +313,14 @@ fun MainScreen() {
         }
     }
 
+    fun answerAtSite(st: StopRow, site: SiteRow) {
+        val open = day?.let { db.openSegment(it.id) }
+        if (day != null && (open == null || open.startedAt <= st.startedAt)) db.endOpenSegment(day.id, st.startedAt)
+        db.answerStop(st, "work", site.id)
+        changeStop = null
+        SyncWorker.enqueue(ctx)
+    }
+
     fun onSiteTap(site: SiteRow) {
         when {
             segment?.siteId == site.id -> confirmEndSite = site
@@ -408,12 +416,7 @@ fun MainScreen() {
                         db.answerStop(st, "travel", null)
                         SyncWorker.enqueue(ctx)
                     },
-                    onStopAtSite = { st, site ->
-                        val open = day?.let { db.openSegment(it.id) }
-                        if (day != null && (open == null || open.startedAt <= st.startedAt)) db.endOpenSegment(day.id, st.startedAt)
-                        db.answerStop(st, "work", site.id)
-                        SyncWorker.enqueue(ctx)
-                    },
+                    onStopAtSite = { st, site -> answerAtSite(st, site) },
                     onStopChange = { changeStop = it },
                   )
                 }
@@ -522,6 +525,9 @@ fun MainScreen() {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Du standest ab ${timeFmt.format(Instant.ofEpochMilli(st.startedAt))} Uhr an einem unbekannten Ort. Was war das?")
+                    for (site in nearSites(sites, st)) {
+                        Button(onClick = { answerAtSite(st, site) }, modifier = Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White)) { Text("Ich war bei ${site.name}", fontWeight = FontWeight.Bold, maxLines = 2) }
+                    }
                     Button(onClick = { confirmPause = st }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5159), contentColor = Color.White)) { Text("Pause") }
                     Button(onClick = { nameStop = st }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) { Text("Ort benennen") }
                     OutlinedButton(onClick = {
@@ -639,9 +645,7 @@ fun TodayScreen(
         )
 
         for (stop in stops) {
-            val nearby = sites.filter { it.system == null && it.lat != null && it.lng != null }
-                .map { it to distanceMeters(stop.lat, stop.lng, it.lat!!, it.lng!!) }
-                .filter { it.second < NEAR_SITE_M }.minByOrNull { it.second }?.first
+            val nearby = nearSites(sites, stop)
             StopCard(stop, nearby, onStopPause, onStopName, onStopContinue, onStopAtSite)
         }
 
@@ -835,7 +839,7 @@ suspend fun downloadAndInstall(ctx: android.content.Context, onProgress: (Int) -
 
 /** Nachfrage nach einem Halt an einem unbekannten Ort. */
 @Composable
-fun StopCard(stop: StopRow, nearby: SiteRow?, onPause: (StopRow) -> Unit, onName: (StopRow) -> Unit, onContinue: (StopRow) -> Unit, onAtSite: (StopRow, SiteRow) -> Unit) {
+fun StopCard(stop: StopRow, nearby: List<SiteRow>, onPause: (StopRow) -> Unit, onName: (StopRow) -> Unit, onContinue: (StopRow) -> Unit, onAtSite: (StopRow, SiteRow) -> Unit) {
     val since = timeFmt.format(Instant.ofEpochMilli(stop.startedAt))
     val until = stop.endedAt?.let { timeFmt.format(Instant.ofEpochMilli(it)) }
     Column(
@@ -847,8 +851,8 @@ fun StopCard(stop: StopRow, nearby: SiteRow?, onPause: (StopRow) -> Unit, onName
             if (until == null) "Du stehst seit $since Uhr an einem unbekannten Ort." else "Du standest von $since bis $until Uhr an einem unbekannten Ort.",
             fontSize = 14.sp,
         )
-        if (nearby != null) {
-            Button(onClick = { onAtSite(stop, nearby) }, modifier = Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White)) { Text("Ja, ich bin bei ${nearby.name}", fontWeight = FontWeight.Bold) }
+        for (site in nearby) {
+            Button(onClick = { onAtSite(stop, site) }, modifier = Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White)) { Text("Ja, ich bin bei ${site.name}", fontWeight = FontWeight.Bold, maxLines = 2) }
         }
         Button(onClick = { onPause(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5159), contentColor = Color.White)) { Text("Pause") }
         Button(onClick = { onName(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) { Text("Ort benennen (zum Beispiel Brillux)") }
@@ -1215,4 +1219,13 @@ fun SettingsScreen() {
 }
 
 /** Ein Halt, der so nah an einer bekannten Baustelle liegt, wird dort vorgeschlagen. */
-const val NEAR_SITE_M = 400.0
+const val NEAR_SITE_M = 600.0
+
+/** Bis zu drei bekannte Orte (keine Lager/Firma) nahe am Halt, der nächste zuerst. */
+fun nearSites(sites: List<SiteRow>, stop: StopRow): List<SiteRow> =
+    sites.filter { it.system == null && it.lat != null && it.lng != null }
+        .map { it to distanceMeters(stop.lat, stop.lng, it.lat!!, it.lng!!) }
+        .filter { it.second < NEAR_SITE_M }
+        .sortedBy { it.second }
+        .take(3)
+        .map { it.first }
