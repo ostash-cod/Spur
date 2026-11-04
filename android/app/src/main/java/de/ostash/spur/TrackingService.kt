@@ -54,7 +54,19 @@ class TrackingService : Service() {
                     stopDetector?.onFix(fix, d.currentSiteId != null)?.let { handleStop(it) }
                 }
             }
+            askLongStop()
             handler.postDelayed(this, TICK_MS)
+        }
+    }
+
+    private var askedStopId = -1L
+
+    private fun askLongStop() {
+        if (dayId < 0) return
+        val st = Db.get(this).latestStop(dayId) ?: return
+        if (st.state == "pending" && st.endedAt == null && st.id != askedStopId && System.currentTimeMillis() - st.startedAt >= ASK_AFTER_MS) {
+            askedStopId = st.id
+            notifyStop(st.startedAt)
         }
     }
 
@@ -138,7 +150,7 @@ class TrackingService : Service() {
                     return
                 }
                 db.addStop(dayId, e.lat, e.lng, e.since)
-                notifyStop(e.since)
+                // Kurze Halte (3 bis 10 Minuten) stehen still in der Liste. Gefragt wird erst nach 10 Minuten (siehe tick).
             }
             is StopEvent.Resume -> {
                 val stop = db.latestStop(dayId) ?: return
@@ -291,6 +303,7 @@ class TrackingService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ASK_CHANNEL = "ask"
         private const val ASK_NOTIFICATION_ID = 2
+        private const val ASK_AFTER_MS = 10 * 60_000L
         private const val RETURN_GAP_MS = 20 * 60_000L
         private const val AWAY_MS = 3 * 60_000L
         private const val AWAY_EXTRA_M = 150.0

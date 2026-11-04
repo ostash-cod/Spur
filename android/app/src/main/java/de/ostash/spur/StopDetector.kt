@@ -16,7 +16,7 @@ sealed class StopEvent {
  * - An einem bekannten Ort wird nichts gemeldet.
  */
 class StopDetector(
-    private val minMs: Long = 10 * 60_000L,
+    private val minMs: Long = 3 * 60_000L,
     private val radiusM: Double = 70.0,
     private val maxAccuracyM: Float = 100f,
     private val leaveMs: Long = 60_000L,

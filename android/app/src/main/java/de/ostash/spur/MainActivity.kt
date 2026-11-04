@@ -1017,6 +1017,15 @@ fun SavePlaceDialog(
                     error = ""
                     scope.launch {
                         try {
+                            // Gibt es den Ort schon mit diesem Namen, wird er benutzt und nichts doppelt angelegt.
+                            val same = withContext(Dispatchers.IO) {
+                                Db.get(ctx).sites().firstOrNull { it.system == null && it.name.trim().equals(name.trim(), ignoreCase = true) }
+                            }
+                            if (same != null) {
+                                busy = false
+                                onSaved(same)
+                                return@launch
+                            }
                             val o = withContext(Dispatchers.IO) {
                                 Api.post(
                                     ctx,
