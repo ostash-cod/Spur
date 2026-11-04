@@ -408,6 +408,12 @@ fun MainScreen() {
                         db.answerStop(st, "travel", null)
                         SyncWorker.enqueue(ctx)
                     },
+                    onStopAtSite = { st, site ->
+                        val open = day?.let { db.openSegment(it.id) }
+                        if (day != null && (open == null || open.startedAt <= st.startedAt)) db.endOpenSegment(day.id, st.startedAt)
+                        db.answerStop(st, "work", site.id)
+                        SyncWorker.enqueue(ctx)
+                    },
                     onStopChange = { changeStop = it },
                   )
                 }
@@ -443,7 +449,16 @@ fun MainScreen() {
                     confirmStart = null
                     if (day == null) startDay(site.id)
                     else {
-                        db.switchSite(day.id, site.id, System.currentTimeMillis())
+                        // Stehst du schon eine Weile in der Nähe (offener Halt), zählt die Arbeit ab dem Beginn des Halts.
+                        val st = stops.filter { it.endedAt == null && site.lat != null && site.lng != null && distanceMeters(it.lat, it.lng, site.lat, site.lng) < NEAR_SITE_M }
+                            .minByOrNull { it.startedAt }
+                        val open = db.openSegment(day.id)
+                        if (st != null && (open == null || open.startedAt <= st.startedAt)) {
+                            db.endOpenSegment(day.id, st.startedAt)
+                            db.answerStop(st, "work", site.id)
+                        } else {
+                            db.switchSite(day.id, site.id, System.currentTimeMillis())
+                        }
                         SyncWorker.enqueue(ctx)
                     }
                 }) { Text("Ja, starten", fontWeight = FontWeight.Bold) }
@@ -582,6 +597,7 @@ fun TodayScreen(
     onStopPause: (StopRow) -> Unit,
     onStopName: (StopRow) -> Unit,
     onStopContinue: (StopRow) -> Unit,
+    onStopAtSite: (StopRow, SiteRow) -> Unit,
     onStopChange: (StopRow) -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -623,7 +639,10 @@ fun TodayScreen(
         )
 
         for (stop in stops) {
-            StopCard(stop, onStopPause, onStopName, onStopContinue)
+            val nearby = sites.filter { it.system == null && it.lat != null && it.lng != null }
+                .map { it to distanceMeters(stop.lat, stop.lng, it.lat!!, it.lng!!) }
+                .filter { it.second < NEAR_SITE_M }.minByOrNull { it.second }?.first
+            StopCard(stop, nearby, onStopPause, onStopName, onStopContinue, onStopAtSite)
         }
 
         if (timeline.isNotEmpty()) {
@@ -816,7 +835,7 @@ suspend fun downloadAndInstall(ctx: android.content.Context, onProgress: (Int) -
 
 /** Nachfrage nach einem Halt an einem unbekannten Ort. */
 @Composable
-fun StopCard(stop: StopRow, onPause: (StopRow) -> Unit, onName: (StopRow) -> Unit, onContinue: (StopRow) -> Unit) {
+fun StopCard(stop: StopRow, nearby: SiteRow?, onPause: (StopRow) -> Unit, onName: (StopRow) -> Unit, onContinue: (StopRow) -> Unit, onAtSite: (StopRow, SiteRow) -> Unit) {
     val since = timeFmt.format(Instant.ofEpochMilli(stop.startedAt))
     val until = stop.endedAt?.let { timeFmt.format(Instant.ofEpochMilli(it)) }
     Column(
@@ -828,6 +847,9 @@ fun StopCard(stop: StopRow, onPause: (StopRow) -> Unit, onName: (StopRow) -> Uni
             if (until == null) "Du stehst seit $since Uhr an einem unbekannten Ort." else "Du standest von $since bis $until Uhr an einem unbekannten Ort.",
             fontSize = 14.sp,
         )
+        if (nearby != null) {
+            Button(onClick = { onAtSite(stop, nearby) }, modifier = Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White)) { Text("Ja, ich bin bei ${nearby.name}", fontWeight = FontWeight.Bold) }
+        }
         Button(onClick = { onPause(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5159), contentColor = Color.White)) { Text("Pause") }
         Button(onClick = { onName(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) { Text("Ort benennen (zum Beispiel Brillux)") }
         OutlinedButton(onClick = { onContinue(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Weiter wie Fahrt") }
@@ -1191,3 +1213,6 @@ fun SettingsScreen() {
         ) { Text("Abmelden", color = Rot) }
     }
 }
+
+/** Ein Halt, der so nah an einer bekannten Baustelle liegt, wird dort vorgeschlagen. */
+const val NEAR_SITE_M = 400.0

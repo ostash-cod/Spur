@@ -62,7 +62,7 @@ class TrackingService : Service() {
             val lat = s.lat
             val lng = s.lng
             if (lat == null || lng == null) null
-            else Place(s.id, lat, lng, if (s.kind == "haendler") maxOf(s.radius, HAENDLER_MIN_RADIUS_M) else s.radius, if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS)
+            else Place(s.id, lat, lng, if (s.system != null) s.radius else maxOf(s.radius, if (s.kind == "haendler") HAENDLER_MIN_RADIUS_M else BAUSTELLE_MIN_RADIUS_M), if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS)
         }
 
     private fun handle(events: List<PlaceEvent>) {
@@ -253,6 +253,7 @@ class TrackingService : Service() {
         private const val MERGE_GAP_MS = 5 * 60_000L
         private const val MERGE_DIST_M = 300.0
         private const val HAENDLER_MIN_RADIUS_M = 150.0
+        private const val BAUSTELLE_MIN_RADIUS_M = 200.0
         private const val INTERVAL_MS = 15_000L
         private const val MIN_DISTANCE_M = 15f
         private const val SYNC_EVERY_POINTS = 40
