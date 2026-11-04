@@ -78,15 +78,16 @@ class TrackingService : Service() {
         if (dayId < 0 || f.accuracy > 100f) return
         val db = Db.get(this)
         val open = db.openSegment(dayId)
-        val place = if (open?.kind == "work" && open.siteId != null && d.currentSiteId != open.siteId) d.places.find { it.siteId == open.siteId } else null
+        val mine = if (open?.kind == "work" && open.siteId != null && d.currentSiteId != open.siteId) d.places.filter { it.siteId == open.siteId } else emptyList()
+        val place = mine.minByOrNull { distanceMeters(f.lat, f.lng, it.lat, it.lng) - it.radiusM }
         if (open == null || place == null) { awaySince = null; awaySiteId = null; return }
-        if (distanceMeters(f.lat, f.lng, place.lat, place.lng) <= place.radiusM + AWAY_EXTRA_M) { awaySince = null; awaySiteId = null; return }
+        if (mine.any { distanceMeters(f.lat, f.lng, it.lat, it.lng) <= it.radiusM + AWAY_EXTRA_M }) { awaySince = null; awaySiteId = null; return }
         if (awaySiteId != open.siteId) { awaySiteId = open.siteId; awaySince = f.ts }
         val since = awaySince ?: f.ts.also { awaySince = it }
         if (f.ts - since >= AWAY_MS) {
             // Ende = letzter Punkt, an dem man noch bei der Baustelle war
             val lastInside = db.pointsSince(dayId, open.startedAt)
-                .lastOrNull { it.acc <= 100f && distanceMeters(it.lat, it.lng, place.lat, place.lng) <= place.radiusM + AWAY_EXTRA_M }?.ts
+                .lastOrNull { p -> p.acc <= 100f && mine.any { distanceMeters(p.lat, p.lng, it.lat, it.lng) <= it.radiusM + AWAY_EXTRA_M } }?.ts
             db.endOpenSegment(dayId, maxOf(lastInside ?: since, open.startedAt))
             awaySince = null; awaySiteId = null
             SyncWorker.enqueue(this)
@@ -94,9 +95,13 @@ class TrackingService : Service() {
     }
 
     private fun loadPlaces(): List<Place> =
-        Db.get(this).sites().mapNotNull { s ->
-            val lat = s.lat
-            val lng = s.lng
+        Db.get(this).sites().flatMap { s ->
+            val main = placeFor(s, s.lat, s.lng)
+            listOfNotNull(main) + s.extraPoints().mapNotNull { placeFor(s, it.first, it.second) }
+        }
+
+    private fun placeFor(s: SiteRow, lat: Double?, lng: Double?): Place? =
+        run {
             if (lat == null || lng == null) null
             else {
                 val baustelle = s.system == null && s.kind != "haendler"

@@ -130,4 +130,17 @@ class PlaceDetectorTest {
         assertEquals(listOf<PlaceEvent>(PlaceEvent.Arrive(1, 0)), events)
         assertEquals(1L, d.currentSiteId)
     }
+
+    @Test
+    fun ortMitZweitemPunktWirdVonDortErkanntUndNichtVerlassen() {
+        val a = Place(1, baseLat, baseLng, 100.0, 60_000)
+        val b = Place(1, baseLat + 400 / mPerDegLat, baseLng, 100.0, 60_000) // Parkplatz 400 m nördlich
+        val d = PlaceDetector(listOf(a, b))
+        val events = run(d, listOf(fix(0, 700), fix(30, 410), fix(60, 405), fix(100, 400), fix(160, 395), fix(200, 405)))
+        assertEquals(1L, d.currentSiteId)
+        assertEquals(1, events.count { it is PlaceEvent.Arrive })
+        // Zu Fuß zum ersten Punkt und zurück: keine Abfahrt
+        val more = run(d, listOf(fix(300, 200), fix(400, 20), fix(500, 10), fix(600, 390)))
+        assertTrue(more.none { it is PlaceEvent.Leave })
+    }
 }

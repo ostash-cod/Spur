@@ -63,8 +63,10 @@ class PlaceDetector(
 
         val cur = current
         if (cur != null) {
-            val d = distanceMeters(f.lat, f.lng, cur.lat, cur.lng)
-            if (d <= cur.radiusM + (cur.leaveMarginM ?: leaveMarginM)) {
+            // Ein Ort kann mehrere Punkte haben (zum Beispiel Parkplatz auf der anderen Seite): solange man bei einem davon ist, ist man noch da.
+            val same = places.filter { it.siteId == cur.siteId } + cur
+            val stillThere = same.any { distanceMeters(f.lat, f.lng, it.lat, it.lng) <= it.radiusM + (it.leaveMarginM ?: leaveMarginM) }
+            if (stillThere) {
                 outsideSince = null
                 lastInsideTs = f.ts
                 return events

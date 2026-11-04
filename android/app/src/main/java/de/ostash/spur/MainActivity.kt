@@ -1,5 +1,6 @@
 package de.ostash.spur
 
+import android.content.Context
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -317,6 +318,7 @@ fun MainScreen() {
         val open = day?.let { db.openSegment(it.id) }
         if (day != null && (open == null || open.startedAt <= st.startedAt)) db.endOpenSegment(day.id, st.startedAt)
         db.answerStop(st, "work", site.id)
+        learnPoint(ctx, site, st.lat, st.lng)
         changeStop = null
         SyncWorker.enqueue(ctx)
     }
@@ -455,6 +457,8 @@ fun MainScreen() {
                         // Stehst du schon eine Weile in der Nähe (offener Halt), zählt die Arbeit ab dem Beginn des Halts.
                         val st = stops.filter { it.endedAt == null && site.lat != null && site.lng != null && distanceMeters(it.lat, it.lng, site.lat, site.lng) < NEAR_SITE_M }
                             .minByOrNull { it.startedAt }
+                        // Steht man von Hand gewählt an einem Ort, der bekannt ist, aber von einer anderen Seite: diesen Punkt merken.
+                        db.lastPoint()?.let { p -> if (System.currentTimeMillis() - p.ts < 3 * 60_000L && p.acc <= 50f) learnPoint(ctx, site, p.lat, p.lng) }
                         val open = db.openSegment(day.id)
                         if (st != null && (open == null || open.startedAt <= st.startedAt)) {
                             db.endOpenSegment(day.id, st.startedAt)
@@ -1238,3 +1242,19 @@ fun nearSites(sites: List<SiteRow>, stop: StopRow): List<SiteRow> =
         .sortedBy { it.second }
         .take(3)
         .map { it.first }
+
+/**
+ * Merkt sich einen weiteren Punkt eines Ortes (zum Beispiel den Parkplatz auf der anderen Seite des Baumarkts),
+ * damit er beim nächsten Mal von dort aus auch erkannt wird. Nur wenn der Punkt zwischen 60 und 500 m vom Ort liegt.
+ */
+fun learnPoint(ctx: Context, site: SiteRow, lat: Double, lng: Double) {
+    if (site.system != null) return
+    val d = site.distanceTo(lat, lng) ?: return
+    if (d < 60.0 || d > 500.0) return
+    Thread {
+        runCatching {
+            val o = Api.post(ctx, "/api/sites/${site.id}/points", JSONObject().put("lat", lat).put("lng", lng), Prefs.token(ctx) ?: "")
+            Db.get(ctx).setSiteExtra(site.id, extraString(o))
+        }
+    }.start()
+}

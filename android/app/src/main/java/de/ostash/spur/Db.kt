@@ -28,7 +28,23 @@ data class SiteRow(
     val radius: Double,
     val system: String?,
     val kind: String = "baustelle",
-)
+    /** Weitere Punkte des Ortes als "lat,lng;lat,lng" (Parkplatz, andere Seite). */
+    val extra: String = "",
+) {
+    fun extraPoints(): List<Pair<Double, Double>> =
+        extra.split(";").mapNotNull { p ->
+            val a = p.split(",")
+            val la = a.getOrNull(0)?.toDoubleOrNull()
+            val lo = a.getOrNull(1)?.toDoubleOrNull()
+            if (la != null && lo != null) la to lo else null
+        }
+
+    /** Kleinster Abstand zu einem der bekannten Punkte des Ortes (Mitte und weitere Punkte). */
+    fun distanceTo(lat: Double, lng: Double): Double? {
+        val all = buildList { if (this@SiteRow.lat != null && this@SiteRow.lng != null) add(this@SiteRow.lat to this@SiteRow.lng); addAll(extraPoints()) }
+        return all.minOfOrNull { distanceMeters(it.first, it.second, lat, lng) }
+    }
+}
 
 /** Ein Halt an einem unbekannten Ort. Die App fragt, was das war (Pause, Händler, einfach weiter). */
 data class StopRow(
@@ -57,7 +73,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 4) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 5) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -94,7 +110,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                 lng REAL,
                 radius REAL NOT NULL,
                 system TEXT,
-                kind TEXT NOT NULL DEFAULT 'baustelle')""",
+                kind TEXT NOT NULL DEFAULT 'baustelle',
+                extra TEXT NOT NULL DEFAULT '')""",
         )
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS stops (
@@ -126,6 +143,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         if (oldVersion in 2..2) db.execSQL("ALTER TABLE sites ADD COLUMN system TEXT")
         if (oldVersion in 2..3) db.execSQL("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'")
         if (oldVersion < 4) createSiteTables(db)
+        val hasExtra = db.rawQuery("PRAGMA table_info(sites)", null).use { c ->
+            var found = false
+            while (c.moveToNext()) if (c.getString(1) == "extra") found = true
+            found
+        }
+        if (!hasExtra) db.execSQL("ALTER TABLE sites ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
     }
 
     private fun day(c: Cursor) = DayRow(
@@ -243,6 +266,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                     put("radius", s.radius)
                     put("system", s.system)
                     put("kind", s.kind)
+                    put("extra", s.extra)
                 }
                 db.insert("sites", null, cv)
             }
@@ -254,7 +278,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
 
     fun sites(): List<SiteRow> =
         readableDatabase.rawQuery(
-            "SELECT id, name, customer_name, color, lat, lng, radius, system, kind FROM sites ORDER BY (system IS NOT NULL), name COLLATE NOCASE",
+            "SELECT id, name, customer_name, color, lat, lng, radius, system, kind, extra FROM sites ORDER BY (system IS NOT NULL), name COLLATE NOCASE",
             null,
         ).use { c ->
             buildList {
@@ -265,6 +289,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                             if (c.isNull(4)) null else c.getDouble(4), if (c.isNull(5)) null else c.getDouble(5), c.getDouble(6),
                             if (c.isNull(7)) null else c.getString(7),
                             c.getString(8),
+                            c.getString(9),
                         ),
                     )
                 }
@@ -444,9 +469,14 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             put("id", s.id); put("name", s.name); put("customer_name", s.customerName); put("color", s.color)
             if (s.lat != null) put("lat", s.lat) else putNull("lat")
             if (s.lng != null) put("lng", s.lng) else putNull("lng")
-            put("radius", s.radius); put("system", s.system); put("kind", s.kind)
+            put("radius", s.radius); put("system", s.system); put("kind", s.kind); put("extra", s.extra)
         }
         writableDatabase.insertWithOnConflict("sites", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    @Synchronized
+    fun setSiteExtra(siteId: Long, extra: String) {
+        writableDatabase.execSQL("UPDATE sites SET extra = ? WHERE id = ?", arrayOf<Any>(extra, siteId))
     }
 
     /** Wann und wie oft ein Ort benutzt wurde (für die Sortierung der Kacheln). */

@@ -42,6 +42,7 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                                 radius = o.optDouble("radius_m", 100.0),
                                 system = if (o.isNull("system")) null else o.getString("system"),
                                 kind = o.optString("kind", "baustelle"),
+                                extra = extraString(o),
                             ),
                         )
                     }
@@ -113,4 +114,10 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
             WorkManager.getInstance(ctx).enqueueUniqueWork("sync", ExistingWorkPolicy.APPEND_OR_REPLACE, request)
         }
     }
+}
+
+/** Weitere Punkte eines Ortes aus der Antwort des Servers als "lat,lng;lat,lng". */
+fun extraString(o: JSONObject): String {
+    val arr = o.optJSONArray("extra_points") ?: return ""
+    return (0 until arr.length()).joinToString(";") { i -> arr.getJSONObject(i).let { "${it.getDouble("lat")},${it.getDouble("lng")}" } }
 }

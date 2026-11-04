@@ -653,6 +653,7 @@ function siteDialog(site, customers, kindArg, draft) {
     h('div', { class: 'row' }, h('div', {}, h('label', { for: 's-lat' }, 'Breite'), lat), h('div', {}, h('label', { for: 's-lng' }, 'Länge'), lng), h('div', {}, h('label', { for: 's-rad' }, 'Radius (m)'), rad)),
     h('p', { class: 'hint' }, 'Die Position wird aus der Adresse automatisch gesucht. Du kannst auch einen Google-Maps-Link in das Feld Adresse oder Breite einfügen. Mit der Position erkennt die App die Ankunft. Ohne Radius gilt der Standard aus den Einstellungen.'),
     h('div', {}, h('button', { type: 'button', class: 'small', onclick: () => searchNow(true) }, 'Position erneut suchen')),
+    ...(site?.extra_points?.length ? [extraPointsBox(site)] : []),
     h('label', {}, 'Farbe'),
     swatchBox,
     err,
@@ -689,6 +690,36 @@ function siteDialog(site, customers, kindArg, draft) {
   );
   updateCustomerUi();
   name.focus();
+}
+
+// Weitere Punkte eines Ortes (Parkplatz, andere Seite), von der App gelernt. Der Chef kann sie löschen.
+function extraPointsBox(site) {
+  const box = h('div', { style: 'margin:10px 0' }, h('label', {}, 'Weitere Punkte (von der App gelernt)'));
+  for (const p of site.extra_points) {
+    const row = h(
+      'div',
+      { class: 'row', style: 'align-items:center;gap:8px;margin:4px 0' },
+      h('a', { href: `https://www.google.com/maps?q=${p.lat},${p.lng}`, target: '_blank', rel: 'noopener' }, `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)} ↗`),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'small',
+          onclick: async () => {
+            try {
+              await api(`/sites/${site.id}/points/${p.id}`, { method: 'DELETE' });
+              row.remove();
+            } catch (ex) {
+              alert(ex.message);
+            }
+          },
+        },
+        'Löschen',
+      ),
+    );
+    box.append(row);
+  }
+  return box;
 }
 
 function customerDialog(c) {

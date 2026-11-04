@@ -364,3 +364,24 @@ test('App-Update: Version und Datei werden ausgeliefert, ohne Datei 404', async 
   assert.equal(f.headers['content-type'], 'application/vnd.android.package-archive');
   assert.equal(f.body, 'PK-testdatei');
 });
+
+test('Zusätzliche Punkte: nur in der Nähe, nicht doppelt, Chef kann löschen', async () => {
+  const { call, at, wt } = await setup();
+  const s = (await call('POST', '/api/sites', at, { name: 'Hagebau', kind: 'haendler', lat: 48.0, lng: 11.0 })).json();
+  assert.deepEqual(s.extra_points, []);
+  // 200 m nördlich (0,0018 Grad Breite): wird gemerkt
+  const near = await call('POST', `/api/sites/${s.id}/points`, wt, { lat: 48.0018, lng: 11.0 });
+  assert.equal(near.statusCode, 201);
+  assert.equal(near.json().extra_points.length, 1);
+  // fast derselbe Punkt: schon abgedeckt, nichts Neues
+  const dup = await call('POST', `/api/sites/${s.id}/points`, wt, { lat: 48.0019, lng: 11.0 });
+  assert.equal(dup.json().extra_points.length, 1);
+  // 5 km entfernt: abgelehnt
+  assert.equal((await call('POST', `/api/sites/${s.id}/points`, wt, { lat: 48.05, lng: 11.0 })).statusCode, 422);
+  // Löschen nur der Chef
+  const pid = near.json().extra_points[0].id;
+  assert.equal((await call('DELETE', `/api/sites/${s.id}/points/${pid}`, wt)).statusCode, 403);
+  assert.equal((await call('DELETE', `/api/sites/${s.id}/points/${pid}`, at)).statusCode, 200);
+  const list = (await call('GET', '/api/sites', wt)).json().find((x) => x.id === s.id);
+  assert.deepEqual(list.extra_points, []);
+});

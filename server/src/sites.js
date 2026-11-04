@@ -96,6 +96,14 @@ export async function resolveMapLink(rawUrl, fetchImpl = fetch) {
   throw Object.assign(new Error('In diesem Link steht keine Position. Öffne den Ort in Google Maps, wähle „Teilen“ und kopiere den Link, oder trage die Koordinaten von Hand ein.'), { status: 422 });
 }
 
+const MAX_EXTRA_POINT_DIST_M = 600;
+const MIN_EXTRA_POINT_DIST_M = 60;
+function distanceM(lat1, lng1, lat2, lng2) {
+  const rad = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * rad) / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(((lng2 - lng1) * rad) / 2) ** 2;
+  return 2 * 6371000 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl = fetch }) {
   const siteRow = (r, defaultRadius) => ({
     id: r.id,
@@ -112,6 +120,8 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     archived: !!r.archived,
     system: r.system ?? null,
     kind: r.kind ?? 'baustelle',
+    // Weitere Punkte des Ortes (zum Beispiel ein Parkplatz auf der anderen Seite). Die App erkennt den Ort an jedem dieser Punkte.
+    extra_points: db.prepare('SELECT id, lat, lng FROM site_points WHERE site_id = ? ORDER BY id').all(r.id),
   });
 
   const SITE_SELECT = `SELECT s.*, c.name AS customer_name FROM sites s LEFT JOIN customers c ON c.id = s.customer_id`;
@@ -285,6 +295,33 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     return siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), getSettings(db).site_radius_m);
   });
 
+  // Zusätzlichen Punkt zu einem Ort merken (Parkplatz, andere Seite). Jeder angemeldete Mitarbeiter darf das,
+  // aber nur in der Nähe des Ortes, damit nichts Falsches gelernt wird.
+  app.post('/api/sites/:id/points', { preHandler: requireUser }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const row = db.prepare('SELECT * FROM sites WHERE id = ?').get(id);
+    if (!row) return reply.code(404).send({ error: 'Ort nicht gefunden' });
+    if (row.system) return reply.code(400).send({ error: 'Lager und Firma haben feste Orte.' });
+    const b = req.body ?? {};
+    if (!isNum(b.lat) || !isNum(b.lng) || Math.abs(b.lat) > 90 || Math.abs(b.lng) > 180) {
+      return reply.code(400).send({ error: 'Koordinaten ungültig' });
+    }
+    const known = [{ lat: row.lat, lng: row.lng }, ...db.prepare('SELECT lat, lng FROM site_points WHERE site_id = ?').all(id)].filter((p) => p.lat != null && p.lng != null);
+    const dist = Math.min(...known.map((p) => distanceM(p.lat, p.lng, b.lat, b.lng)));
+    if (known.length && dist > MAX_EXTRA_POINT_DIST_M) return reply.code(422).send({ error: 'Der Punkt ist zu weit vom Ort entfernt.' });
+    if (known.length && dist < MIN_EXTRA_POINT_DIST_M) return siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), getSettings(db).site_radius_m); // schon abgedeckt
+    const count = db.prepare('SELECT COUNT(*) AS n FROM site_points WHERE site_id = ?').get(id).n;
+    if (count >= 10) return reply.code(422).send({ error: 'Dieser Ort hat schon 10 zusätzliche Punkte.' });
+    db.prepare('INSERT INTO site_points (site_id, lat, lng) VALUES (?, ?, ?)').run(id, b.lat, b.lng);
+    return reply.code(201).send(siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), getSettings(db).site_radius_m));
+  });
+
+  app.delete('/api/sites/:id/points/:pid', { preHandler: requireAdmin }, async (req, reply) => {
+    const info = db.prepare('DELETE FROM site_points WHERE id = ? AND site_id = ?').run(Number(req.params.pid), Number(req.params.id));
+    if (!info.changes) return reply.code(404).send({ error: 'Punkt nicht gefunden' });
+    return { ok: true };
+  });
+
   // Art (Baustelle oder Händler) ändern. Für das Handy, das kein PATCH kann.
   app.post('/api/sites/:id/kind', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id);
@@ -315,6 +352,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     if (db.prepare('SELECT 1 FROM segments WHERE site_id = ?').get(id)) {
       return reply.code(409).send({ error: 'Für diese Baustelle sind schon Zeiten gebucht. Bitte archiviere sie stattdessen, sonst gehen Stunden verloren.' });
     }
+    db.prepare('DELETE FROM site_points WHERE site_id = ?').run(id);
     db.prepare('DELETE FROM sites WHERE id = ?').run(id);
     return { ok: true };
   });
