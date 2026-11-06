@@ -385,3 +385,18 @@ test('Zusätzliche Punkte: nur in der Nähe, nicht doppelt, Chef kann löschen',
   const list = (await call('GET', '/api/sites', wt)).json().find((x) => x.id === s.id);
   assert.deepEqual(list.extra_points, []);
 });
+
+test('Handy: Name ändern und Kunde nachträglich anlegen', async () => {
+  const { call, at, wt } = await setup();
+  const s = (await call('POST', '/api/sites', at, { name: 'Stauffenbergstr 3', lat: 48.0, lng: 11.0 })).json();
+  assert.equal(s.customer_id ?? null, null);
+  assert.equal((await call('POST', `/api/sites/${s.id}/edit`, wt, { name: 'x' })).statusCode, 403, 'nur Chef');
+  assert.equal((await call('POST', `/api/sites/${s.id}/edit`, at, { name: '  ' })).statusCode, 400);
+  const e = (await call('POST', `/api/sites/${s.id}/edit`, at, { name: 'Stauffenbergstr 3 · Wolfram', create_customer: true })).json();
+  assert.equal(e.name, 'Stauffenbergstr 3 · Wolfram');
+  assert.equal(e.customer_name, 'Stauffenbergstr 3 · Wolfram');
+  const again = (await call('POST', `/api/sites/${s.id}/edit`, at, { create_customer: true })).json();
+  assert.equal(again.customer_id, e.customer_id, 'nicht zweimal anlegen');
+  const customers = (await call('GET', '/api/customers', at)).json();
+  assert.equal(customers.filter((c) => c.name.startsWith('Stauffenbergstr')).length, 1);
+});

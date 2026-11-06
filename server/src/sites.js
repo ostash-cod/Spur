@@ -341,6 +341,27 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     return siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), getSettings(db).site_radius_m);
   });
 
+  // Name ändern und/oder einen Kunden mit dem Namen der Baustelle anlegen. Für das Handy, das kein PATCH kann.
+  app.post('/api/sites/:id/edit', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id);
+    const row = db.prepare('SELECT * FROM sites WHERE id = ?').get(id);
+    if (!row) return reply.code(404).send({ error: 'Ort nicht gefunden' });
+    if (row.system) return reply.code(400).send({ error: 'Lager und Firma sind feste Orte.' });
+    const b = req.body ?? {};
+    let name = row.name;
+    if (b.name !== undefined) {
+      name = text(b.name);
+      if (!name) return reply.code(400).send({ error: 'Name fehlt' });
+    }
+    let customerId = row.customer_id;
+    if (b.create_customer === true && customerId == null && row.kind !== 'haendler') {
+      const c = db.prepare('INSERT INTO customers (name, address) VALUES (?, ?)').run(name, row.address ?? null);
+      customerId = Number(c.lastInsertRowid);
+    }
+    db.prepare('UPDATE sites SET name = ?, customer_id = ? WHERE id = ?').run(name, customerId, id);
+    return siteRow(db.prepare(`${SITE_SELECT} WHERE s.id = ?`).get(id), getSettings(db).site_radius_m);
+  });
+
   app.delete('/api/sites/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id);
     if (!db.prepare('SELECT 1 FROM sites WHERE id = ?').get(id)) {

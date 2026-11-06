@@ -38,6 +38,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -753,6 +754,9 @@ fun SiteMenuDialog(site: SiteRow, onPosition: () -> Unit, onDismiss: () -> Unit)
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     val toHaendler = site.kind != "haendler"
+    var editing by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf(site.name) }
+    var makeCustomer by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(site.name) },
@@ -785,6 +789,42 @@ fun SiteMenuDialog(site: SiteRow, onPosition: () -> Unit, onDismiss: () -> Unit)
                             }
                         },
                     ) { Text(if (toHaendler) "Art ändern: zum Händler" else "Art ändern: zur Baustelle") }
+                }
+                if (site.system == null) {
+                    OutlinedButton(onClick = { editing = !editing }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Name ändern / Kunde anlegen") }
+                    if (editing) {
+                        OutlinedTextField(value = newName, onValueChange = { newName = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        if (site.customerName == null && site.kind != "haendler") {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = makeCustomer, onCheckedChange = { makeCustomer = it })
+                                Text("Kunde mit diesem Namen anlegen")
+                            }
+                        }
+                        Button(
+                            enabled = !busy && newName.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            onClick = {
+                                busy = true
+                                error = ""
+                                scope.launch {
+                                    try {
+                                        val body = JSONObject().put("name", newName.trim()).put("create_customer", makeCustomer)
+                                        val o = withContext(Dispatchers.IO) { Api.post(ctx, "/api/sites/${site.id}/edit", body, Prefs.token(ctx) ?: "") }
+                                        withContext(Dispatchers.IO) {
+                                            Db.get(ctx).upsertSite(site.copy(name = o.optString("name", site.name), customerName = if (o.isNull("customer_name")) null else o.optString("customer_name")))
+                                        }
+                                        SyncWorker.enqueue(ctx)
+                                        onDismiss()
+                                    } catch (e: Api.ApiException) {
+                                        error = e.message ?: "Fehler"
+                                    } catch (e: Exception) {
+                                        error = "Keine Verbindung zum Server"
+                                    }
+                                    busy = false
+                                }
+                            },
+                        ) { Text("Speichern", fontWeight = FontWeight.Bold) }
+                    }
                 }
                 if (error.isNotEmpty()) Text(error, color = Rot)
             }
