@@ -222,6 +222,7 @@ class TrackingService : Service() {
             }
             ACTION_START -> {
                 dayId = db.startDayIfNone(System.currentTimeMillis()).id
+                Reminder.dayStarted(this) // keine Erinnerung mehr, der Tag läuft
                 SyncWorker.enqueue(this)
             }
             else -> {

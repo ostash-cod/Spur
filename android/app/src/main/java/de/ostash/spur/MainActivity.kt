@@ -1,6 +1,12 @@
 package de.ostash.spur
 
 import android.content.Context
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Switch
+import java.time.DayOfWeek
+import java.time.LocalTime
+import java.time.format.TextStyle as DayStyle
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.platform.LocalFocusManager
@@ -187,6 +193,7 @@ fun LoginScreen(onDone: () -> Unit) {
                             val res = withContext(Dispatchers.IO) { Api.login(ctx, code.trim()) }
                             val user = res.getJSONObject("user")
                             Prefs.saveLogin(ctx, res.getString("token"), user.getString("name"), user.getBoolean("uses_private_car"), user.optString("role") == "admin")
+                            Reminder.schedule(ctx)
                             onDone()
                         } catch (e: Api.ApiException) {
                             error = e.message ?: "Fehler"
@@ -239,6 +246,7 @@ fun MainScreen() {
     // Läuft ein Tag, aber der Aufzeichnungsdienst wurde beendet (Update, Neustart, Energiesparen), startet er wieder, sobald die App geöffnet wird.
     LaunchedEffect(Unit) {
         if (db.openDay() != null && hasFineLocation(ctx)) TrackingService.start(ctx)
+        Reminder.schedule(ctx) // Erinnerung zum Tagesbeginn
     }
     // Chef-Status beim Start vom Server holen (wer sich früher angemeldet hat, hat ihn vielleicht nicht gespeichert).
     LaunchedEffect(Unit) {
@@ -1273,6 +1281,10 @@ fun SettingsScreen() {
             ) { Text("Energiesparen für Spur ausschalten") }
         }
 
+
+        Text("Erinnerung Tagesbeginn", fontWeight = FontWeight.Bold)
+        ReminderSection()
+
         Text("App-Update", fontWeight = FontWeight.Bold)
         UpdateSection()
 
@@ -1286,6 +1298,76 @@ fun SettingsScreen() {
             onClick = { Prefs.logout(ctx) },
             modifier = Modifier.fillMaxWidth().height(52.dp),
         ) { Text("Abmelden", color = Rot) }
+    }
+}
+
+/** Einstellungen der Erinnerung zum Tagesbeginn: Wochentage, zwei Uhrzeiten, Ton und Vibration. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun ReminderSection() {
+    val ctx = LocalContext.current
+    var cfg by remember { mutableStateOf(Prefs.reminder(ctx)) }
+    fun change(next: ReminderConfig) {
+        cfg = next
+        Prefs.setReminder(ctx, next)
+        Reminder.schedule(ctx)
+    }
+    fun pickTime(current: LocalTime, onPicked: (LocalTime) -> Unit) {
+        android.app.TimePickerDialog(ctx, { _, h, m -> onPicked(LocalTime.of(h, m)) }, current.hour, current.minute, true).show()
+    }
+    fun two(n: Int) = n.toString().padStart(2, '0')
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("Vor Arbeitsbeginn erinnern, wenn der Tag noch nicht läuft", Modifier.weight(1f))
+        Switch(checked = cfg.enabled, onCheckedChange = { change(cfg.copy(enabled = it)) })
+    }
+    if (cfg.enabled) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DayOfWeek.values().forEach { d ->
+                FilterChip(
+                    selected = d in cfg.days,
+                    onClick = { change(cfg.copy(days = if (d in cfg.days) cfg.days - d else cfg.days + d)) },
+                    label = { Text(d.getDisplayName(DayStyle.SHORT, java.util.Locale.GERMANY)) },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(
+                onClick = { pickTime(cfg.first) { change(cfg.copy(first = it)) } },
+                modifier = Modifier.weight(1f).height(52.dp),
+            ) { Text("Erste: ${two(cfg.first.hour)}:${two(cfg.first.minute)}") }
+            OutlinedButton(
+                onClick = { pickTime(cfg.second) { change(cfg.copy(second = it)) } },
+                modifier = Modifier.weight(1f).height(52.dp),
+            ) { Text("Zweite: ${two(cfg.second.hour)}:${two(cfg.second.minute)}") }
+        }
+        Text(
+            "Nach der zweiten Erinnerung kommt alle ${ReminderPlan.REPEAT_MIN} Minuten eine neue, höchstens ${ReminderPlan.MAX_REPEAT_MIN / 60} Stunden lang, bis der Tag läuft.",
+            color = Color(0xFF6A6F75), fontSize = 13.sp,
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Ton")
+            Switch(checked = cfg.sound, onCheckedChange = { change(cfg.copy(sound = it)) })
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Vibration")
+            Switch(checked = cfg.vibrate, onCheckedChange = { change(cfg.copy(vibrate = it)) })
+        }
+        if (!Reminder.canScheduleExact(ctx)) {
+            Text("Damit die Erinnerung pünktlich kommt, muss Spur „Alarme und Erinnerungen“ nutzen dürfen.", color = Color(0xFF9A6B00), fontSize = 13.sp)
+            OutlinedButton(
+                onClick = {
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        ctx.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}")))
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+            ) { Text("„Alarme und Erinnerungen“ erlauben") }
+        }
+        OutlinedButton(onClick = { Reminder.show(ctx) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Text("Erinnerung jetzt zum Test anzeigen")
+        }
+        Text("Bei „Nicht stören“ oder lautlosem Handy kommt kein Ton, nur Vibration.", color = Color(0xFF6A6F75), fontSize = 13.sp)
     }
 }
 
