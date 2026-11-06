@@ -618,8 +618,10 @@ fun TodayScreen(
     val ordered = remember(sites, usage, runningId) { orderSites(sites, usage, runningId) }
     val q = query.trim().lowercase()
     val shown = if (q.isEmpty()) ordered else ordered.filter { it.name.lowercase().contains(q) || (it.customerName ?: "").lowercase().contains(q) }
-    val baustellen = shown.filter { it.kind != "haendler" }
-    val haendler = shown.filter { it.kind == "haendler" }
+    // Baustellen stehen vorn (und der Ort, der gerade läuft). Lager, Firma und Händler sind eingeklappt, falls man sie einmal von Hand braucht.
+    val baustellen = shown.filter { (it.system == null && it.kind != "haendler") || it.id == runningId }
+    val others = shown.filter { it !in baustellen }
+    var showOthers by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -698,10 +700,15 @@ fun TodayScreen(
         for (site in baustellen) {
             SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
         }
-        if (haendler.isNotEmpty()) {
-            Text("Händler", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
-            for (site in haendler) {
-                SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
+        if (others.isNotEmpty()) {
+            val open = showOthers || q.isNotEmpty()
+            OutlinedButton(onClick = { showOthers = !showOthers }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text(if (open) "Lager, Firma und Händler ausblenden ▲" else "Lager, Firma und Händler anzeigen (${others.size}) ▼")
+            }
+            if (open) {
+                for (site in others) {
+                    SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
+                }
             }
         }
         if (isAdmin) {
