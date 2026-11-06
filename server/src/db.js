@@ -7,6 +7,7 @@ export const DEFAULT_SETTINGS = {
   company: {
     name: 'Volodymyr Ostash Fliesen, Trockenbau, Renovierungen',
     address: 'Keltenstraße 31, 82343 Pöcking',
+    email: '',
   },
   // Die Firma hat noch keine Koordinaten; Wladi trägt sie in den Einstellungen ein.
   firma: { lat: null, lng: null, radius_m: 100 },

@@ -223,7 +223,172 @@ function placeholder(title, text, step) {
     return Promise.resolve();
   };
 }
-const berichte = placeholder('Berichte', 'Kundenbericht, Wochennachweis, Lohnbericht und Kilometerblatt.', 'Schritt 5');
+// --- Berichte: Kundenbericht (Stundennachweis) als PDF ------------------------------
+const pad2 = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+// Aus der Auswahl (Woche, Monat oder Von–Bis) die beiden Tage machen.
+function reportPeriod(type, v) {
+  if (type === 'week') {
+    if (!v.day) throw new Error('Bitte einen Tag der Woche wählen.');
+    const [y, m, d] = v.day.split('-').map(Number);
+    const monday = new Date(y, m - 1, d - ((new Date(y, m - 1, d).getDay() + 6) % 7));
+    const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+    return { from: ymd(monday), to: ymd(sunday) };
+  }
+  if (type === 'month') {
+    if (!v.month) throw new Error('Bitte einen Monat wählen.');
+    const [y, m] = v.month.split('-').map(Number);
+    return { from: `${y}-${pad2(m)}-01`, to: ymd(new Date(y, m, 0)) };
+  }
+  if (!v.from || !v.to) throw new Error('Bitte „von“ und „bis“ eintragen.');
+  if (v.to < v.from) throw new Error('„bis“ liegt vor „von“.');
+  return { from: v.from, to: v.to };
+}
+
+async function berichte(main) {
+  const customers = (await api('/customers')).filter((c) => !c.archived);
+  const today = new Date();
+  const COLS = [
+    ['names', 'Namen'], ['times', 'Von und Bis'], ['pause', 'Pause'], ['brutto', 'Brutto'], ['netto', 'Netto'],
+    ['rate', 'Satz (in der Tabelle)'], ['amount', 'Betrag'], ['note', 'Notiz'],
+  ];
+  const DEFAULTS = { cols: { names: true, times: true, pause: true, brutto: true, netto: true, rate: false, amount: true, note: true }, rate_head: true, totals: true, zero_days: false, weekend_color: true, round_minutes: 0 };
+
+  const customerSel = h('select', { id: 'rb-kunde' }, customers.map((c) => h('option', { value: c.id }, c.name)));
+  const typeSel = h('select', { id: 'rb-typ' }, h('option', { value: 'range' }, 'Von – Bis'), h('option', { value: 'week' }, 'Woche'), h('option', { value: 'month' }, 'Monat'));
+  const fromIn = h('input', { id: 'rb-von', type: 'date', value: ymd(new Date(today.getFullYear(), today.getMonth(), 1)) });
+  const toIn = h('input', { id: 'rb-bis', type: 'date', value: ymd(today) });
+  const dayIn = h('input', { id: 'rb-tag', type: 'date', value: ymd(today) });
+  const monthIn = h('input', { id: 'rb-monat', type: 'month', value: `${today.getFullYear()}-${pad2(today.getMonth() + 1)}` });
+  const roundSel = h('select', { id: 'rb-runden' }, h('option', { value: 0 }, 'nicht aufrunden'), ...[5, 10, 15].map((m) => h('option', { value: m }, `auf ${m} Minuten aufrunden`)));
+  const checks = {};
+  const checkBox = (key, label, on) => {
+    const input = h('input', { type: 'checkbox', checked: on });
+    checks[key] = input;
+    return h('label', { class: 'check' }, input, label);
+  };
+  const colBoxes = COLS.map(([k, label]) => checkBox(`col-${k}`, label, DEFAULTS.cols[k]));
+  const otherBoxes = [
+    checkBox('rate_head', 'Stundensatz einmal im Kopf', DEFAULTS.rate_head),
+    checkBox('totals', 'Gesamtsumme', DEFAULTS.totals),
+    checkBox('zero_days', 'Tage ohne Arbeit zeigen', DEFAULTS.zero_days),
+    checkBox('weekend_color', 'Wochenende farbig', DEFAULTS.weekend_color),
+  ];
+
+  const periodBox = h('div', { class: 'row' });
+  const showPeriod = () => {
+    const t = typeSel.value;
+    periodBox.replaceChildren(
+      ...(t === 'range'
+        ? [h('div', {}, h('label', { for: 'rb-von' }, 'Von'), fromIn), h('div', {}, h('label', { for: 'rb-bis' }, 'Bis'), toIn)]
+        : t === 'week'
+          ? [h('div', {}, h('label', { for: 'rb-tag' }, 'Ein Tag aus der Woche'), dayIn)]
+          : [h('div', {}, h('label', { for: 'rb-monat' }, 'Monat'), monthIn)]),
+    );
+  };
+  typeSel.addEventListener('change', showPeriod);
+  showPeriod();
+
+  const readOptions = () => ({
+    cols: Object.fromEntries(COLS.map(([k]) => [k, checks[`col-${k}`].checked])),
+    rate_head: checks.rate_head.checked,
+    totals: checks.totals.checked,
+    zero_days: checks.zero_days.checked,
+    weekend_color: checks.weekend_color.checked,
+    round_minutes: Number(roundSel.value),
+  });
+  const applyOptions = (o) => {
+    for (const [k] of COLS) checks[`col-${k}`].checked = !!o.cols?.[k];
+    for (const k of ['rate_head', 'totals', 'zero_days', 'weekend_color']) checks[k].checked = !!o[k];
+    roundSel.value = String(o.round_minutes ?? 0);
+  };
+  // Einstellungen pro Kunde als Vorlage (in diesem Browser gespeichert)
+  const tplKey = () => `spur-bericht-${customerSel.value}`;
+  const loadTemplate = () => {
+    let o = DEFAULTS;
+    try {
+      const raw = storage('get', tplKey());
+      if (raw) o = { ...DEFAULTS, ...JSON.parse(raw), cols: { ...DEFAULTS.cols, ...(JSON.parse(raw).cols ?? {}) } };
+    } catch {
+      /* Vorlage unlesbar: Standard nehmen */
+    }
+    applyOptions(o);
+  };
+  customerSel.addEventListener('change', loadTemplate);
+  loadTemplate();
+
+  const status = h('p', { class: 'hint', role: 'status' });
+  const frame = h('iframe', { title: 'Vorschau Kundenbericht', style: 'width:100%;height:78vh;border:1px solid var(--linie);border-radius:8px;background:#fff;display:none' });
+  let blobUrl = null;
+
+  async function fetchReport(download) {
+    if (!customerSel.value) throw new Error('Bitte einen Kunden wählen. Es gibt noch keinen Kunden.');
+    const body = { customer_id: Number(customerSel.value), type: typeSel.value, ...reportPeriod(typeSel.value, { from: fromIn.value, to: toIn.value, day: dayIn.value, month: monthIn.value }), options: readOptions(), download };
+    const res = await fetch('/api/reports/customer', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+    if (!res.ok) {
+      if (res.status === 401) signOutLocally();
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Fehler ${res.status}`);
+    }
+    const name = /filename\*=UTF-8''([^;]+)/.exec(res.headers.get('Content-Disposition') ?? '')?.[1];
+    return { blob: await res.blob(), name: name ? decodeURIComponent(name) : 'Stundennachweis.pdf' };
+  }
+
+  const run = async (download) => {
+    status.className = 'hint';
+    status.textContent = 'Erstellt den Bericht …';
+    try {
+      const { blob, name } = await fetchReport(download);
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      blobUrl = URL.createObjectURL(blob);
+      if (download) {
+        const a = h('a', { href: blobUrl, download: name });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        status.className = 'hint ok';
+        status.textContent = `Gespeichert als „${name}“.`;
+      } else {
+        frame.src = blobUrl;
+        frame.style.display = 'block';
+        status.textContent = '';
+      }
+    } catch (ex) {
+      status.className = 'error';
+      status.textContent = ex.message;
+    }
+  };
+
+  main.replaceChildren(
+    h('h1', {}, 'Berichte'),
+    h('p', { class: 'sub' }, 'Kundenbericht (Stundennachweis) als PDF. Alle Arbeitskräfte, die beim Kunden gearbeitet haben, kommen automatisch hinein.'),
+    h(
+      'div',
+      { class: 'card' },
+      h('h2', {}, 'Kundenbericht'),
+      h('label', { for: 'rb-kunde' }, 'Kunde'),
+      customerSel,
+      h('label', { for: 'rb-typ' }, 'Zeitraum'),
+      typeSel,
+      periodBox,
+      h('h2', { style: 'margin-top:18px' }, 'Spalten'),
+      h('div', { class: 'row' }, colBoxes.map((b) => h('div', {}, b))),
+      otherBoxes,
+      h('label', { for: 'rb-runden' }, 'Zeiten'),
+      roundSel,
+      h(
+        'div',
+        { class: 'actions', style: 'margin-top:16px' },
+        h('button', { class: 'primary', type: 'button', onclick: () => run(false) }, 'Vorschau'),
+        h('button', { type: 'button', onclick: () => run(true) }, 'PDF speichern'),
+        h('button', { type: 'button', class: 'small', onclick: () => { storage('set', tplKey(), JSON.stringify(readOptions())); status.className = 'hint ok'; status.textContent = 'Einstellungen für diesen Kunden gemerkt.'; } }, 'Einstellungen für diesen Kunden merken'),
+      ),
+      status,
+    ),
+    frame,
+  );
+}
 const statistik = placeholder('Statistik', 'Stunden und Umsatz pro Monat, Kunde und Projekt.', 'Schritt 7');
 
 // --- Mitarbeiter -----------------------------------------------------------
@@ -775,7 +940,6 @@ function svg(tag, attrs = {}, ...children) {
   return el;
 }
 
-const pad2 = (n) => String(n).padStart(2, '0');
 const toDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 function fmtDuration(ms) {
@@ -1090,6 +1254,7 @@ async function einstellungen(main) {
   const f = {
     name: h('input', { id: 'c-name', value: s.company.name }),
     address: h('input', { id: 'c-addr', value: s.company.address }),
+    email: h('input', { id: 'c-mail', type: 'email', value: s.company.email ?? '' }),
   };
 
   const findFirma = h(
@@ -1159,7 +1324,7 @@ async function einstellungen(main) {
         }
         const rules = [...ruleRows.children].map((row) => [num(row.querySelector('.r-h').value), num(row.querySelector('.r-m').value)]);
         const body = {
-          company: { name: f.name.value, address: f.address.value },
+          company: { name: f.name.value, address: f.address.value, email: f.email.value },
           firma: place('firma'),
           lager: place('lager'),
           site_radius_m: read('site-r'),
@@ -1178,7 +1343,7 @@ async function einstellungen(main) {
         }
       },
     },
-    h('div', { class: 'card' }, h('h2', {}, 'Firma'), h('label', { for: 'c-name' }, 'Name'), f.name, h('label', { for: 'c-addr' }, 'Adresse'), f.address),
+    h('div', { class: 'card' }, h('h2', {}, 'Firma'), h('label', { for: 'c-name' }, 'Name'), f.name, h('label', { for: 'c-addr' }, 'Adresse'), f.address, h('label', { for: 'c-mail' }, 'E-Mail (steht oben rechts im Kundenbericht)'), f.email),
     placeCard('Firma (Keltenstraße 31) – Standort', 'firma', 'Hier gilt als Start der Anfahrt zu den Kunden. Die App erkennt die Firma als festen Ort, wenn die Position eingetragen ist.', findFirma),
     placeCard('Lager Pöcking – Standort', 'lager', 'Link aus Google Maps oder Koordinaten („47.96138, 11.30548“) oben ins Feld Position einfügen.'),
     h(

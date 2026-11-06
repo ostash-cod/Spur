@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import { registerSiteRoutes } from './sites.js';
+import { registerReportRoutes } from './report-routes.js';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
 import {
   candidateHashes,
@@ -29,7 +30,8 @@ const VALIDATORS = {
     if (typeof v?.name !== 'string' || typeof v?.address !== 'string') {
       throw new Error('Firma braucht Name und Adresse');
     }
-    return { name: v.name.trim(), address: v.address.trim() };
+    const email = typeof v.email === 'string' ? v.email.trim().slice(0, 200) : '';
+    return { name: v.name.trim(), address: v.address.trim(), email };
   },
   firma: place,
   lager: place,
@@ -379,6 +381,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   });
 
   registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });
+  registerReportRoutes(app, { db, requireAdmin });
 
   app.get('/api/health', async () => ({ ok: true }));
 
