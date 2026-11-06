@@ -1,6 +1,12 @@
 package de.ostash.spur
 
 import android.content.Context
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.gestures.detectTapGestures
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -622,8 +628,11 @@ fun TodayScreen(
     val baustellen = shown.filter { (it.system == null && it.kind != "haendler") || it.id == runningId }
     val others = shown.filter { it !in baustellen }
     var showOthers by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    // Das Suchfeld soll nicht hängen bleiben: Tipp irgendwo anders oder „Fertig“ auf der Tastatur nimmt den Cursor weg.
+    LaunchedEffect(Unit) { focusManager.clearFocus() }
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Button(
@@ -687,7 +696,9 @@ fun TodayScreen(
                 label = { Text("Suchen") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                trailingIcon = if (query.isNotEmpty()) ({ TextButton(onClick = { query = ""; focusManager.clearFocus() }) { Text("X", fontWeight = FontWeight.Bold) } }) else null,
             )
         }
         if (sites.isEmpty()) {
