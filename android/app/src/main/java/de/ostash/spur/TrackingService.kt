@@ -110,8 +110,9 @@ class TrackingService : Service() {
                     if (s.system != null) s.radius else maxOf(s.radius, if (s.kind == "haendler") HAENDLER_MIN_RADIUS_M else BAUSTELLE_MIN_RADIUS_M),
                     if (s.system != null || s.kind == "haendler") DWELL_SYSTEM_MS else DWELL_SITE_MS,
                     // Eine Baustelle verlässt man nicht, nur weil man ums Haus fährt: weiter weg und länger draußen.
-                    leaveMarginM = if (baustelle) 120.0 else null,
-                    leaveDebounceMs = if (baustelle) 4 * 60_000L else null,
+                    // Händler (große Märkte, man läuft im Gebäude und über den Parkplatz): ebenfalls großzügig, aber etwas kürzer als bei Baustellen.
+                    leaveMarginM = if (baustelle) 120.0 else if (s.system == null) 100.0 else null,
+                    leaveDebounceMs = if (baustelle) 4 * 60_000L else if (s.system == null) 3 * 60_000L else null,
                 )
             }
         }
