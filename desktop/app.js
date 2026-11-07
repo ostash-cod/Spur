@@ -1437,3 +1437,6 @@ Object.assign(pages, { mitarbeiter, kunden, berichte, statistik, einstellungen }
   }
   signOutLocally();
 })();
+
+// Installierbar machen (Symbol auf dem Desktop).
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
