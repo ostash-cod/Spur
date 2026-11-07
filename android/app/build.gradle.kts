@@ -12,8 +12,8 @@ android {
         applicationId = "de.ostash.spur"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.8.2"
+        versionCode = 25
+        versionName = "0.9.0"
     }
 
     buildTypes {
@@ -51,5 +51,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
     testImplementation("junit:junit:4.13.2")
 }

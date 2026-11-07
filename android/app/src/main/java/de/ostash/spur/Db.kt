@@ -73,7 +73,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 8) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 10) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -103,6 +103,16 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
 
     private fun createSheetTables(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS trip_marks (day_id INTEGER NOT NULL, start_ts INTEGER NOT NULL, vehicle TEXT NOT NULL, km REAL, PRIMARY KEY (day_id, start_ts))")
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL UNIQUE,
+                path TEXT NOT NULL,
+                taken_at INTEGER NOT NULL,
+                uploaded INTEGER NOT NULL DEFAULT 0,
+                allocs TEXT,
+                allocs_dirty INTEGER NOT NULL DEFAULT 0)""",
+        )
         db.execSQL("CREATE TABLE IF NOT EXISTS week_closed (week_start TEXT PRIMARY KEY)")
         db.execSQL("CREATE TABLE IF NOT EXISTS day_pause (day_id INTEGER PRIMARY KEY, minutes INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS sheet_outbox (date TEXT PRIMARY KEY, json TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
@@ -117,7 +127,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                 site_id INTEGER,
                 text TEXT NOT NULL,
                 updated_at INTEGER NOT NULL,
-                synced INTEGER NOT NULL DEFAULT 0)""",
+                synced INTEGER NOT NULL DEFAULT 0,
+                kind TEXT NOT NULL DEFAULT 'arbeit')""",
         )
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS photos (
@@ -172,6 +183,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         createNoteTables(db)
         createSheetTables(db)
+        val noteHasKind = db.rawQuery("PRAGMA table_info(notes)", null).use { c ->
+            var found = false
+            while (c.moveToNext()) if (c.getString(1) == "kind") found = true
+            found
+        }
+        if (!noteHasKind) db.execSQL("ALTER TABLE notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'arbeit'")
         if (oldVersion < 2) createSiteTables(db)
         if (oldVersion in 2..2) db.execSQL("ALTER TABLE sites ADD COLUMN system TEXT")
         if (oldVersion in 2..3) db.execSQL("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'")
@@ -511,6 +528,29 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         writableDatabase.insertWithOnConflict("sites", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    // ---- Belege ----
+    data class ReceiptRow(val id: Long, val clientId: String, val path: String, val takenAt: Long, val uploaded: Boolean, val allocs: String?, val allocsDirty: Boolean)
+
+    fun addReceipt(clientId: String, path: String, takenAt: Long) {
+        writableDatabase.execSQL("INSERT OR IGNORE INTO receipts (client_id, path, taken_at) VALUES (?, ?, ?)", arrayOf<Any>(clientId, path, takenAt))
+    }
+
+    fun setReceiptAllocs(clientId: String, json: String?) {
+        writableDatabase.execSQL("UPDATE receipts SET allocs = ?, allocs_dirty = 1 WHERE client_id = ?", arrayOf<Any?>(json, clientId))
+    }
+
+    fun pendingReceipts(): List<ReceiptRow> =
+        readableDatabase.rawQuery("SELECT id, client_id, path, taken_at, uploaded, allocs, allocs_dirty FROM receipts WHERE uploaded = 0 OR allocs_dirty = 1 ORDER BY id", null)
+            .use { c -> buildList { while (c.moveToNext()) add(ReceiptRow(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4) == 1, if (c.isNull(5)) null else c.getString(5), c.getInt(6) == 1)) } }
+
+    fun markReceiptUploaded(id: Long) {
+        writableDatabase.execSQL("UPDATE receipts SET uploaded = 1 WHERE id = ?", arrayOf<Any>(id))
+    }
+
+    fun markReceiptAllocsSent(id: Long) {
+        writableDatabase.execSQL("UPDATE receipts SET allocs_dirty = 0 WHERE id = ?", arrayOf<Any>(id))
+    }
+
     // ---- Tageszettel ----
     data class TripMark(val vehicle: String, val km: Double?)
 
@@ -570,29 +610,29 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             .use { c -> if (c.moveToFirst()) c.getInt(0) else null }
 
     // ---- Notizen und Fotos ----
-    data class NoteRow(val id: Long, val clientId: String, val date: String, val siteId: Long?, val text: String)
+    data class NoteRow(val id: Long, val clientId: String, val date: String, val siteId: Long?, val text: String, val kind: String = "arbeit")
     data class PhotoRow(val id: Long, val clientId: String, val path: String, val siteId: Long?, val takenAt: Long)
 
     private fun noteFrom(c: android.database.Cursor) =
-        NoteRow(c.getLong(0), c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getLong(3), c.getString(4))
+        NoteRow(c.getLong(0), c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getLong(3), c.getString(4), c.getString(5))
 
     fun notesForDate(date: String): List<NoteRow> =
-        readableDatabase.rawQuery("SELECT id, client_id, date, site_id, text FROM notes WHERE date = ? ORDER BY id", arrayOf(date))
+        readableDatabase.rawQuery("SELECT id, client_id, date, site_id, text, kind FROM notes WHERE date = ? ORDER BY id", arrayOf(date))
             .use { c -> buildList { while (c.moveToNext()) add(noteFrom(c)) } }
 
     /** Speichert (oder ändert) die Notiz für Tag und Ort. Leerer Text löscht sie. */
-    fun saveNote(date: String, siteId: Long?, text: String) {
-        val cid = "note-$date-${siteId ?: 0}"
+    fun saveNote(date: String, siteId: Long?, text: String, kind: String = "arbeit") {
+        val cid = (if (kind == "material") "mat-" else "note-") + "$date-${siteId ?: 0}"
         val t = text.trim()
         writableDatabase.execSQL(
-            """INSERT INTO notes (client_id, date, site_id, text, updated_at, synced) VALUES (?, ?, ?, ?, ?, 0)
+            """INSERT INTO notes (client_id, date, site_id, text, updated_at, synced, kind) VALUES (?, ?, ?, ?, ?, 0, ?)
                ON CONFLICT(client_id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at, synced = 0""",
-            arrayOf<Any?>(cid, date, siteId, t, System.currentTimeMillis()),
+            arrayOf<Any?>(cid, date, siteId, t, System.currentTimeMillis(), kind),
         )
     }
 
     fun unsyncedNotes(): List<NoteRow> =
-        readableDatabase.rawQuery("SELECT id, client_id, date, site_id, text FROM notes WHERE synced = 0 ORDER BY id", null)
+        readableDatabase.rawQuery("SELECT id, client_id, date, site_id, text, kind FROM notes WHERE synced = 0 ORDER BY id", null)
             .use { c -> buildList { while (c.moveToNext()) add(noteFrom(c)) } }
 
     fun markNoteSynced(id: Long, text: String) {

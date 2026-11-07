@@ -1,0 +1,42 @@
+// Prüft die Seite „Belege“: Eingangskorb, Zuordnen auf Baustelle und Lager, Ansicht je Baustelle mit Material.
+const { chromium } = require('playwright');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+let srv;
+const ok = (cond, msg) => { console.log(cond ? 'OK  ' : 'FEHLER', msg); if (!cond) process.exitCode = 1; };
+(async () => {
+  fs.rmSync('/tmp/spur-e2e6', { recursive: true, force: true });
+  srv = spawn('node', ['--no-warnings', '/home/claude/spur/server/src/index.js'], { env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e6', PORT: '3117' }, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 1500));
+  const base = 'http://127.0.0.1:3117';
+  const code = fs.readFileSync('/tmp/spur-e2e6/erster-zugang.txt', 'utf8').match(/: ([A-Z0-9-]+)/)[1];
+  const json = async (path, token, body, method = 'POST') => (await fetch(base + '/api' + path, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) })).json();
+  const boss = (await (await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) })).json()).token;
+  const cust = await json('/customers', boss, { name: 'Bauer' });
+  const site = await json('/sites', boss, { name: 'Lilienstraße 77', customer_id: cust.id });
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(300, 1)]);
+  const up = await fetch(base + '/api/receipts', { method: 'POST', headers: { 'Content-Type': 'application/pdf', Authorization: `Bearer ${boss}`, 'x-client-id': 'receipt-e2e-0001', 'x-taken-at': String(Date.now()) }, body: pdf });
+  ok(up.status === 201, 'Beleg hochgeladen');
+  await json('/notes', boss, { client_id: 'mat-e2e-0001', date: '2026-11-06', site_id: site.id, kind: 'material', text: '2 Sack Estrich' });
+
+  const browser = await chromium.launch();
+  const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(base + '/');
+  await page.fill('#code', code); await page.click('#login-form button'); await page.waitForSelector('table');
+  await page.click('a[data-page=belege]'); await page.waitForSelector('text=Noch keiner Baustelle zugeordnet');
+  ok(true, 'Beleg liegt im Eingangskorb');
+  await page.click('text=Zuordnen'); await page.waitForSelector('text=Beleg zuordnen');
+  await page.click('text=+ Ziel hinzufügen');
+  await page.fill('input[placeholder^="Menge"]', '10 von 20 Schienen');
+  await page.click('dialog button.primary');
+  await page.waitForSelector('text=Der Eingangskorb ist leer');
+  ok(true, 'Nach dem Zuordnen ist der Eingangskorb leer');
+  await page.selectOption('main select', String(site.id));
+  await page.waitForSelector('text=10 von 20 Schienen');
+  ok(true, 'Beleg erscheint bei der Baustelle mit Text');
+  ok(await page.isVisible('text=2 Sack Estrich'), 'Material-Notiz erscheint bei der Baustelle');
+  ok(errors.length === 0, 'keine Fehler im Browser ' + errors.join('; '));
+  await browser.close();
+})().catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => srv && srv.kill());

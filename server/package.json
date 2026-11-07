@@ -6,7 +6,7 @@
   "description": "Spur (von Wladi) – Server und Desktop-Oberfläche",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --no-warnings --test test/api.test.js test/sites.test.js test/report.test.js test/notes.test.js test/sheets.test.js"
+    "test": "node --no-warnings --test test/api.test.js test/sites.test.js test/report.test.js test/notes.test.js test/sheets.test.js test/receipts.test.js"
   },
   "engines": {
     "node": ">=22.13"

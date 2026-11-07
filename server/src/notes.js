@@ -10,7 +10,7 @@ const isId = (v) => typeof v === 'string' && v.length >= 8 && v.length <= 64;
 export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDir }) {
   app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_PHOTO_BYTES }, (_req, body, done) => done(null, body));
 
-  const noteRow = (r) => ({ id: r.id, user_id: r.user_id, user_name: r.user_name, client_id: r.client_id, date: r.date, site_id: r.site_id, text: r.text, updated_at: r.updated_at });
+  const noteRow = (r) => ({ id: r.id, user_id: r.user_id, user_name: r.user_name, client_id: r.client_id, date: r.date, site_id: r.site_id, kind: r.kind, text: r.text, updated_at: r.updated_at });
   const NOTE_SELECT = 'SELECT n.*, u.name AS user_name FROM notes n JOIN users u ON u.id = n.user_id';
 
   // Notiz anlegen oder ändern (gleiche client_id = gleiche Notiz). Leerer Text löscht sie.
@@ -21,6 +21,8 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
     if (b.site_id != null && !db.prepare('SELECT 1 FROM sites WHERE id = ?').get(Number(b.site_id))) {
       return reply.code(400).send({ error: 'Baustelle nicht gefunden' });
     }
+    const kind = b.kind ?? 'arbeit';
+    if (kind !== 'arbeit' && kind !== 'material') return reply.code(400).send({ error: 'Art der Notiz ungültig' });
     const text = typeof b.text === 'string' ? b.text.trim() : '';
     if (text.length > MAX_NOTE) return reply.code(400).send({ error: 'Die Notiz ist zu lang' });
     if (!text) {
@@ -29,10 +31,10 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
     }
     const at = Number.isInteger(b.updated_at) ? b.updated_at : Date.now();
     db.prepare(
-      `INSERT INTO notes (user_id, client_id, date, site_id, text, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(user_id, client_id) DO UPDATE SET date = excluded.date, site_id = excluded.site_id, text = excluded.text, updated_at = excluded.updated_at
+      `INSERT INTO notes (user_id, client_id, date, site_id, text, updated_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, client_id) DO UPDATE SET date = excluded.date, site_id = excluded.site_id, text = excluded.text, updated_at = excluded.updated_at, kind = excluded.kind
        WHERE excluded.updated_at >= notes.updated_at`,
-    ).run(req.user.id, b.client_id, b.date, b.site_id ?? null, text, at);
+    ).run(req.user.id, b.client_id, b.date, b.site_id ?? null, text, at, kind);
     const row = db.prepare('SELECT id FROM notes WHERE user_id = ? AND client_id = ?').get(req.user.id, b.client_id);
     return { id: row.id };
   });
@@ -44,9 +46,12 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
     if (!DATE_RE.test(from) || !DATE_RE.test(to) || to < from) return reply.code(400).send({ error: 'from und to (Datum) werden gebraucht' });
     const admin = req.user.role === 'admin';
     const uid = admin ? (req.query.user_id ? Number(req.query.user_id) : null) : req.user.id;
-    const rows = uid
-      ? db.prepare(`${NOTE_SELECT} WHERE n.date >= ? AND n.date <= ? AND n.user_id = ? ORDER BY n.date, n.updated_at`).all(from, to, uid)
-      : db.prepare(`${NOTE_SELECT} WHERE n.date >= ? AND n.date <= ? ORDER BY n.date, n.updated_at`).all(from, to);
+    const where = ['n.date >= ?', 'n.date <= ?'];
+    const args = [from, to];
+    if (uid) { where.push('n.user_id = ?'); args.push(uid); }
+    if (req.query.kind === 'arbeit' || req.query.kind === 'material') { where.push('n.kind = ?'); args.push(req.query.kind); }
+    if (req.query.site_id) { where.push('n.site_id = ?'); args.push(Number(req.query.site_id)); }
+    const rows = db.prepare(`${NOTE_SELECT} WHERE ${where.join(' AND ')} ORDER BY n.date, n.updated_at`).all(...args);
     return rows.map(noteRow);
   });
 

@@ -31,7 +31,7 @@ export function registerReportRoutes(app, { db, requireAdmin }) {
     const noteRows = db
       .prepare(
         `SELECT n.date, n.text FROM notes n JOIN sites si ON si.id = n.site_id
-         WHERE si.customer_id = ? AND n.date >= ? AND n.date <= ? AND n.text != '' ORDER BY n.date, n.updated_at`,
+         WHERE si.customer_id = ? AND n.date >= ? AND n.date <= ? AND n.text != '' AND n.kind = 'arbeit' ORDER BY n.date, n.updated_at`,
       )
       .all(customer.id, b.from, b.to);
     for (const r of noteRows) notes[r.date] = notes[r.date] ? `${notes[r.date]}\n${r.text}` : r.text;

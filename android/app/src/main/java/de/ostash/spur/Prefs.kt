@@ -24,6 +24,8 @@ object Prefs {
     fun usesPrivateCar(c: Context): Boolean = sp(c).getBoolean("car", false)
     fun isAdmin(c: Context): Boolean = sp(c).getBoolean("admin", false)
     fun setAdmin(c: Context, admin: Boolean) { sp(c).edit().putBoolean("admin", admin).apply() }
+    fun canReceipts(c: Context): Boolean = sp(c).getBoolean("receipts", false)
+    fun setCanReceipts(c: Context, v: Boolean) { sp(c).edit().putBoolean("receipts", v).apply() }
     fun lastSync(c: Context): Long = sp(c).getLong("last_sync", 0L)
 
     fun setLastSync(c: Context, ts: Long) = sp(c).edit().putLong("last_sync", ts).apply()
@@ -34,7 +36,7 @@ object Prefs {
 
     /** Meldet ab, die lokalen Tage und Punkte bleiben erhalten, bis sie abgeglichen sind. */
     fun logout(c: Context) {
-        sp(c).edit().remove("token").remove("name").remove("car").remove("admin").apply()
+        sp(c).edit().remove("token").remove("name").remove("car").remove("admin").remove("receipts").apply()
     }
 
     // --- Erinnerung zum Tagesbeginn ---

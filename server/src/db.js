@@ -87,6 +87,23 @@ CREATE TABLE IF NOT EXISTS notes (
   UNIQUE (user_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS notes_date ON notes (date);
+CREATE TABLE IF NOT EXISTS receipts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  client_id TEXT NOT NULL,
+  taken_at INTEGER NOT NULL,
+  file TEXT NOT NULL DEFAULT '',
+  ext TEXT NOT NULL DEFAULT 'pdf',
+  bytes INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (user_id, client_id)
+);
+CREATE TABLE IF NOT EXISTS receipt_allocs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_id INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+  site_id INTEGER NOT NULL REFERENCES sites(id),
+  text TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS receipt_allocs_site ON receipt_allocs (site_id);
 CREATE TABLE IF NOT EXISTS sheets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id),
@@ -152,6 +169,8 @@ export function openDb(path = ':memory:') {
   const hasColumn = (table, column) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
   if (!hasColumn('customers', 'address')) db.exec('ALTER TABLE customers ADD COLUMN address TEXT');
   if (!hasColumn('sites', 'system')) db.exec('ALTER TABLE sites ADD COLUMN system TEXT');
+  if (!hasColumn('users', 'can_receipts')) db.exec('ALTER TABLE users ADD COLUMN can_receipts INTEGER NOT NULL DEFAULT 0');
+  if (!hasColumn('notes', 'kind')) db.exec("ALTER TABLE notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'arbeit'");
   if (!hasColumn('sites', 'kind')) db.exec("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'");
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {

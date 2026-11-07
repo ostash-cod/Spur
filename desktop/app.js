@@ -418,6 +418,25 @@ async function mitarbeiter(main, userId, dateStr) {
           },
         }),
       ),
+      h(
+        'td',
+        {},
+        u.role === 'admin'
+          ? h('span', { class: 'hint' }, 'immer')
+          : h('input', {
+              type: 'checkbox',
+              'aria-label': `Belege für ${u.name}`,
+              checked: u.can_receipts,
+              onchange: async (e) => {
+                try {
+                  await api(`/users/${u.id}`, { method: 'PATCH', body: { can_receipts: e.target.checked } });
+                } catch (err) {
+                  e.target.checked = !e.target.checked;
+                  alert(err.message);
+                }
+              },
+            }),
+      ),
       h('td', {}, u.active ? 'aktiv' : 'deaktiviert'),
       h(
         'td',
@@ -477,7 +496,7 @@ async function mitarbeiter(main, userId, dateStr) {
       h(
         'table',
         {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Privatauto'), h('th', {}, 'Status'), h('th', {}, ''))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Privatauto'), h('th', {}, 'Belege'), h('th', {}, 'Status'), h('th', {}, ''))),
         h('tbody', {}, rows),
       ),
       h('p', { class: 'hint' }, 'Privatauto: Nur dann erscheinen in der App die Knöpfe für Privatauto und Transporter. Serhii hat zum Beispiel kein Auto.'),
@@ -941,6 +960,7 @@ function svg(tag, attrs = {}, ...children) {
 }
 
 const toDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const fmtDateTime = (ms) => new Date(ms).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 function fmtDuration(ms) {
   const min = Math.max(0, Math.round(ms / 60000));
@@ -1235,7 +1255,7 @@ async function tagesansicht(main, userId, dateStr) {
     ? h('div', { class: 'card' },
         h('h2', {}, 'Notizen und Fotos'),
         ...notes.map((n) => h('div', { style: 'margin:0 0 10px' },
-          h('strong', {}, n.site_id ? siteById.get(n.site_id)?.name ?? 'Baustelle' : 'Ohne Baustelle'),
+          h('strong', {}, (n.kind === 'material' ? '📦 Material · ' : '') + (n.site_id ? siteById.get(n.site_id)?.name ?? 'Baustelle' : 'Ohne Baustelle')),
           h('div', { style: 'white-space:pre-wrap' }, n.text))),
         photos.length ? h('div', {}, ...photos.map(photoView)) : '')
     : null;
@@ -1423,7 +1443,87 @@ async function einstellungen(main) {
 }
 
 // --- Start -----------------------------------------------------------------
-Object.assign(pages, { mitarbeiter, kunden, berichte, statistik, einstellungen });
+
+// --- Belege: Eingangskorb und Material pro Baustelle -------------------------------------
+async function belege(main, siteArg) {
+  const sites = await api('/sites?all=1');
+  const siteById = new Map(sites.map((x) => [x.id, x]));
+  const choices = sites.filter((x) => x.kind !== 'haendler');
+  const filterSel = h('select', { style: 'width:auto' },
+    h('option', { value: '' }, 'Eingangskorb (ohne Baustelle)'),
+    h('option', { value: 'all' }, 'Alle Belege'),
+    ...choices.map((x) => h('option', { value: String(x.id) }, x.name + (x.customer_name ? ` · ${x.customer_name}` : ''))),
+  );
+  filterSel.value = siteArg ?? '';
+  filterSel.onchange = () => (location.hash = `#/belege/${filterSel.value}`);
+  const box = h('div', {});
+  main.replaceChildren(
+    h('h1', {}, 'Belege und Material'),
+    h('p', { class: 'hint' }, 'Lieferscheine und Rechnungen, die am Handy gescannt wurden. Ordne sie Baustellen oder dem Lager zu. Ein Beleg kann auf mehrere Ziele aufgeteilt werden.'),
+    h('div', { class: 'actions', style: 'margin:10px 0 18px;align-items:center' }, h('label', { style: 'margin:0' }, 'Anzeigen: '), filterSel),
+    box,
+  );
+  const query = !siteArg ? '?unassigned=1' : siteArg === 'all' ? '' : `?site_id=${siteArg}`;
+  const receipts = await api(`/receipts${query}`);
+
+  const openFile = async (r) => {
+    const res = await fetch(`/api/receipts/${r.id}/file`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return alert('Beleg nicht ladbar');
+    window.open(URL.createObjectURL(await res.blob()), '_blank');
+  };
+  const editAllocs = (r) => {
+    const rows = r.allocs.map((a) => ({ ...a }));
+    const list = h('div', {});
+    const draw = () => list.replaceChildren(...rows.map((a, i) => h('div', { style: 'display:flex;gap:8px;margin:6px 0;align-items:center' },
+      (() => { const sel = h('select', {}, ...choices.map((x) => h('option', { value: String(x.id) }, x.name))); sel.value = String(a.site_id); sel.onchange = () => (a.site_id = Number(sel.value)); return sel; })(),
+      h('input', { type: 'text', value: a.text ?? '', placeholder: 'Menge oder Notiz, zum Beispiel „10 von 20 Stück“', style: 'flex:1', oninput: (e) => (a.text = e.target.value) }),
+      h('button', { type: 'button', class: 'small', onclick: () => { rows.splice(i, 1); draw(); } }, 'Entfernen'))));
+    draw();
+    const msg = h('p', { class: 'hint' });
+    const dlg = openDialog(
+      h('h2', {}, 'Beleg zuordnen'),
+      h('p', { class: 'hint' }, `${fmtDateTime(r.taken_at)} · ${r.user_name}`),
+      list,
+      h('button', { type: 'button', onclick: () => { rows.push({ site_id: choices[0]?.id, text: '' }); draw(); } }, '+ Ziel hinzufügen'),
+      msg,
+      h('div', { class: 'actions', style: 'margin-top:12px' },
+        h('button', { type: 'button', class: 'primary', onclick: async () => {
+          try {
+            await api(`/receipts/${r.id}/allocs`, { method: 'PUT', body: { allocs: rows.filter((a) => a.site_id).map((a) => ({ site_id: a.site_id, text: a.text ?? '' })) } });
+            dlg?.close?.();
+            route();
+          } catch (err) { msg.className = 'error'; msg.textContent = err.message; }
+        } }, 'Speichern'),
+        h('button', { type: 'button', onclick: () => dlg?.close?.() }, 'Abbrechen')),
+    );
+  };
+  const card = (r) => h('div', { class: 'card' },
+    h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' },
+      h('strong', {}, `${fmtDateTime(r.taken_at)} · ${r.user_name}`),
+      h('button', { type: 'button', class: 'small', onclick: () => openFile(r) }, r.ext === 'pdf' ? 'PDF öffnen' : 'Bild öffnen'),
+      h('button', { type: 'button', class: 'small', onclick: () => editAllocs(r) }, r.allocs.length ? 'Zuordnung ändern' : 'Zuordnen'),
+      h('button', { type: 'button', class: 'small', onclick: async () => { if (confirm('Diesen Beleg endgültig löschen?')) { await api(`/receipts/${r.id}`, { method: 'DELETE' }); route(); } } }, 'Löschen')),
+    r.allocs.length
+      ? h('ul', {}, ...r.allocs.map((a) => h('li', {}, h('strong', {}, siteById.get(a.site_id)?.name ?? 'Baustelle'), a.text ? ` – ${a.text}` : '')))
+      : h('p', { class: 'hint' }, 'Noch keiner Baustelle zugeordnet.'));
+  box.replaceChildren(
+    ...(receipts.length ? receipts.map(card) : [h('div', { class: 'card placeholder' }, siteArg ? 'Keine Belege.' : 'Der Eingangskorb ist leer.')]),
+  );
+
+  // Material (Notizen „Material“) einer gewählten Baustelle
+  if (siteArg && siteArg !== 'all') {
+    const mat = await api(`/notes?from=2020-01-01&to=2100-01-01&kind=material&site_id=${siteArg}`);
+    box.append(
+      h('div', { class: 'card' },
+        h('h2', {}, '📦 Material aus dem Lager (Notizen der Mitarbeiter)'),
+        mat.length
+          ? h('table', {}, h('tbody', {}, ...mat.map((n) => h('tr', {}, h('td', {}, n.date.split('-').reverse().join('.')), h('td', {}, n.user_name), h('td', { style: 'white-space:pre-wrap' }, n.text)))))
+          : h('p', { class: 'hint' }, 'Keine Material-Notizen.')),
+    );
+  }
+}
+
+Object.assign(pages, { mitarbeiter, kunden, berichte, statistik, einstellungen, belege });
 
 (async function init() {
   token = storage('get', 'spur-token');

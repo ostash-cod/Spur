@@ -7,6 +7,7 @@ import { registerSiteRoutes } from './sites.js';
 import { registerReportRoutes } from './report-routes.js';
 import { registerNoteRoutes } from './notes.js';
 import { registerSheetRoutes } from './sheets.js';
+import { registerReceiptRoutes } from './receipts.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
@@ -173,6 +174,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       language: b.language ?? row.language,
       uses_private_car: b.uses_private_car === undefined ? row.uses_private_car : b.uses_private_car ? 1 : 0,
       active: b.active === undefined ? row.active : b.active ? 1 : 0,
+      can_receipts: b.can_receipts === undefined ? row.can_receipts : b.can_receipts ? 1 : 0,
     };
     if (!LANGUAGES.includes(next.language)) {
       return reply.code(400).send({ error: 'Sprache muss de, ru oder uk sein' });
@@ -180,11 +182,12 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     if (id === req.user.id && !next.active) {
       return reply.code(400).send({ error: 'Du kannst dich nicht selbst deaktivieren' });
     }
-    db.prepare('UPDATE users SET name = ?, language = ?, uses_private_car = ?, active = ? WHERE id = ?').run(
+    db.prepare('UPDATE users SET name = ?, language = ?, uses_private_car = ?, active = ?, can_receipts = ? WHERE id = ?').run(
       next.name,
       next.language,
       next.uses_private_car,
       next.active,
+      next.can_receipts,
       id,
     );
     if (!next.active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
@@ -389,6 +392,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   registerReportRoutes(app, { db, requireAdmin });
   registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
   registerSheetRoutes(app, { db, requireUser });
+  registerReceiptRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
 
   app.get('/api/health', async () => ({ ok: true }));
 

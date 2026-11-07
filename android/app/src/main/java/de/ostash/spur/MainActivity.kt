@@ -656,11 +656,16 @@ fun TodayScreen(
             modifier = Modifier.fillMaxWidth().height(110.dp),
         ) { Text(if (running) "Tag beenden" else "Tag starten", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold) }
 
-        var noteDialog by remember { mutableStateOf<Pair<LocalDate, Long?>?>(null) }
+        var noteDialog by remember { mutableStateOf<Triple<LocalDate, Long?, String>?>(null) }
         var notesVersion by remember { mutableIntStateOf(0) }
         var photoMsg by remember { mutableStateOf(false) }
         val takePhoto = rememberPhotoTaker(runningId) { photoMsg = true }
-        PhotoNoteButtons(onPhoto = takePhoto, onNote = { noteDialog = LocalDate.now() to runningId })
+        var cameraChoice by remember { mutableStateOf(false) }
+        var receiptId by remember { mutableStateOf<String?>(null) }
+        val scanReceipt = rememberReceiptScanner { receiptId = it }
+        if (cameraChoice) CameraChoiceDialog(onPhoto = takePhoto, onReceipt = scanReceipt, onDismiss = { cameraChoice = false })
+        receiptId?.let { rid -> ReceiptAssignDialog(rid, ordered, runningId, onDone = { receiptId = null }) }
+        PhotoNoteButtons(onPhoto = { if (Prefs.canReceipts(ctx)) cameraChoice = true else takePhoto() }, onNote = { noteDialog = Triple(LocalDate.now(), runningId, "arbeit") }, onMaterial = { noteDialog = Triple(LocalDate.now(), runningId, "material") })
         if (photoMsg) Text("Foto gespeichert. Es wird hochgeladen, sobald Internet da ist.", color = Gruen, fontSize = 14.sp)
         run {
             val z = ZoneId.systemDefault()
@@ -669,9 +674,9 @@ fun TodayScreen(
             if (today != null) SheetButton(today, now, sites.associateBy { it.id })
         }
         WeekSubmitButton(now, sites.associateBy { it.id })
-        NotesList(LocalDate.now(), sites.associateBy { it.id }, notesVersion) { n -> noteDialog = LocalDate.now() to n.siteId }
-        noteDialog?.let { (d, sid) ->
-            NoteDialog(d, sid, sites.associateBy { it.id }, onDismiss = { noteDialog = null; notesVersion++ })
+        NotesList(LocalDate.now(), sites.associateBy { it.id }, notesVersion) { n -> noteDialog = Triple(LocalDate.now(), n.siteId, n.kind) }
+        noteDialog?.let { (d, sid, kd) ->
+            NoteDialog(d, sid, sites.associateBy { it.id }, kd, onDismiss = { noteDialog = null; notesVersion++ })
         }
 
         if (permissionHint) {
@@ -779,13 +784,13 @@ fun PastDayScreen(date: LocalDate, now: Long, db: Db, siteMap: Map<Long, SiteRow
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        var noteDialog by remember { mutableStateOf<Pair<LocalDate, Long?>?>(null) }
+        var noteDialog by remember { mutableStateOf<Triple<LocalDate, Long?, String>?>(null) }
         var notesVersion by remember { mutableIntStateOf(0) }
         val ctx = LocalContext.current
         val locked = isDayLocked(db, date)
-        if (!locked) PhotoNoteButtons(onPhoto = null, onNote = { noteDialog = date to null })
-        NotesList(date, siteMap, notesVersion) { n -> if (!locked) noteDialog = date to n.siteId }
-        noteDialog?.let { (d, sid) -> NoteDialog(d, sid, siteMap, onDismiss = { noteDialog = null; notesVersion++ }) }
+        if (!locked) PhotoNoteButtons(onPhoto = null, onNote = { noteDialog = Triple(date, null, "arbeit") }, onMaterial = { noteDialog = Triple(date, null, "material") })
+        NotesList(date, siteMap, notesVersion) { n -> if (!locked) noteDialog = Triple(date, n.siteId, n.kind) }
+        noteDialog?.let { (d, sid, kd) -> NoteDialog(d, sid, siteMap, kd, onDismiss = { noteDialog = null; notesVersion++ }) }
         if (days.isEmpty()) {
             Text("An diesem Tag wurde nichts aufgezeichnet.", color = Color(0xFF6A6F75))
         }

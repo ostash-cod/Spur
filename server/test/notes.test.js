@@ -69,3 +69,15 @@ test('Fotos: hochladen, nur JPEG, zweimal gleiche ID = ein Foto, Zugriff nur Bes
   assert.equal((await call('DELETE', `/api/photos/${id}`, at)).statusCode, 200);
   assert.equal((await call('GET', `/api/photos/${id}/file`, at)).statusCode, 404);
 });
+
+test('Material-Notiz: eigene Art, zählt nicht als Arbeitsnotiz, filterbar', async () => {
+  const { call, at, wt, site } = await setup();
+  await call('POST', '/api/notes', wt, { client_id: 'note-0001-aaaa', date: '2026-11-06', site_id: site, text: 'Bad gefliest' });
+  await call('POST', '/api/notes', wt, { client_id: 'mat-0001-bbbb', date: '2026-11-06', site_id: site, kind: 'material', text: '2 Sack Estrich' });
+  const all = (await call('GET', '/api/notes?from=2026-11-01&to=2026-11-30', at)).json();
+  assert.equal(all.length, 2);
+  const mat = (await call('GET', `/api/notes?from=2026-11-01&to=2026-11-30&kind=material&site_id=${site}`, at)).json();
+  assert.equal(mat.length, 1);
+  assert.equal(mat[0].kind, 'material');
+  assert.equal((await call('POST', '/api/notes', wt, { client_id: 'mat-0002-cccc', date: '2026-11-06', kind: 'quatsch', text: 'x' })).statusCode, 400);
+});

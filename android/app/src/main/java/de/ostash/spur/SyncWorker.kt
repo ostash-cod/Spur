@@ -24,7 +24,11 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
         val db = Db.get(ctx)
         try {
             // Wer bin ich? (Der Chef-Status steht auf dem Server und kann sich seit der Anmeldung geändert haben.)
-            runCatching { Prefs.setAdmin(ctx, Api.get(ctx, "/api/me", token).optString("role") == "admin") }
+            runCatching {
+                val me = Api.get(ctx, "/api/me", token)
+                Prefs.setAdmin(ctx, me.optString("role") == "admin")
+                Prefs.setCanReceipts(ctx, me.optBoolean("can_receipts", false))
+            }
             // Aktuelle Baustellen vom Server holen (für die Kacheln).
             val sites = Api.getArray(ctx, "/api/sites", token)
             db.replaceSites(
@@ -101,12 +105,37 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                     db.sheetSent(date, json)
                 }
             }
+            for (r in db.pendingReceipts()) {
+                var uploaded = r.uploaded
+                if (!uploaded) {
+                    val f = java.io.File(r.path)
+                    if (!f.exists()) { db.markReceiptUploaded(r.id); uploaded = true }
+                    else try {
+                        val type = if (r.path.endsWith(".pdf")) "application/pdf" else "image/jpeg"
+                        Api.postBytes(ctx, "/api/receipts", f.readBytes(), type, mapOf("x-client-id" to r.clientId, "x-taken-at" to r.takenAt.toString()), token)
+                        db.markReceiptUploaded(r.id)
+                        f.delete() // auf dem Handy wird kein Beleg behalten
+                        uploaded = true
+                    } catch (e: Api.ApiException) {
+                        if (e.code == 403 || e.code == 415 || e.code == 400) { db.markReceiptUploaded(r.id); f.delete(); uploaded = true } else throw e
+                    }
+                }
+                if (uploaded && r.allocsDirty) {
+                    val arr = r.allocs?.let { JSONArray(it) } ?: JSONArray()
+                    try {
+                        Api.post(ctx, "/api/receipts/allocs", JSONObject().put("client_id", r.clientId).put("allocs", arr), token)
+                    } catch (e: Api.ApiException) {
+                        if (e.code != 400 && e.code != 404) throw e
+                    }
+                    db.markReceiptAllocsSent(r.id)
+                }
+            }
             for (n in db.unsyncedNotes()) {
                 try {
                     Api.post(
                         ctx, "/api/notes",
                         JSONObject().put("client_id", n.clientId).put("date", n.date)
-                            .put("site_id", n.siteId ?: JSONObject.NULL).put("text", n.text)
+                            .put("site_id", n.siteId ?: JSONObject.NULL).put("text", n.text).put("kind", n.kind)
                             .put("updated_at", System.currentTimeMillis()),
                         token,
                     )

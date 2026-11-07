@@ -119,12 +119,12 @@ fun noteSiteChoices(db: Db, date: LocalDate, sites: Map<Long, SiteRow>, extra: L
 /** Notiz zu einem Tag. Gibt es nur eine Baustelle, ist sie gleich gewählt; bei mehreren tippt man die richtige an. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, onDismiss: () -> Unit) {
+fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, kind: String = "arbeit", onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { Db.get(ctx) }
     val choices = remember(date) { noteSiteChoices(db, date, sites, startSiteId) }
     var siteId by remember { mutableStateOf(startSiteId ?: choices.firstOrNull()?.id) }
-    val saved = remember(date, siteId) { db.notesForDate(date.toString()).firstOrNull { it.siteId == siteId }?.text ?: "" }
+    val saved = remember(date, siteId) { db.notesForDate(date.toString()).firstOrNull { it.siteId == siteId && it.kind == kind }?.text ?: "" }
     var text by remember(date, siteId) { mutableStateOf(saved) }
     val dayName = when (date) {
         LocalDate.now() -> "heute"
@@ -133,7 +133,7 @@ fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, o
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Notiz für $dayName") },
+        title = { Text(if (kind == "material") "Material für $dayName" else "Notiz für $dayName") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (choices.size > 1) {
@@ -147,7 +147,7 @@ fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, o
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text("Was wurde gemacht?") },
+                    label = { Text(if (kind == "material") "Was wurde aus dem Lager genommen?" else "Was wurde gemacht?") },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp),
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 )
@@ -155,7 +155,7 @@ fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, o
         },
         confirmButton = {
             Button(onClick = {
-                db.saveNote(date.toString(), siteId, text)
+                db.saveNote(date.toString(), siteId, text, kind)
                 SyncWorker.enqueue(ctx)
                 onDismiss()
             }) { Text("Speichern") }
@@ -166,12 +166,13 @@ fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, o
 
 /** Die zwei Knöpfe Foto und Notiz nebeneinander. */
 @Composable
-fun PhotoNoteButtons(onPhoto: (() -> Unit)?, onNote: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+fun PhotoNoteButtons(onPhoto: (() -> Unit)?, onNote: () -> Unit, onMaterial: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (onPhoto != null) {
-            OutlinedButton(onClick = onPhoto, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("📷 Foto", fontSize = 17.sp, fontWeight = FontWeight.Bold) }
+            OutlinedButton(onClick = onPhoto, modifier = Modifier.weight(1f).heightIn(min = 56.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp)) { Text("📷 Foto", fontSize = 15.sp, fontWeight = FontWeight.Bold) }
         }
-        OutlinedButton(onClick = onNote, modifier = Modifier.weight(1f).heightIn(min = 56.dp)) { Text("📝 Notiz", fontSize = 17.sp, fontWeight = FontWeight.Bold) }
+        OutlinedButton(onClick = onNote, modifier = Modifier.weight(1f).heightIn(min = 56.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp)) { Text("📝 Notiz", fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+        OutlinedButton(onClick = onMaterial, modifier = Modifier.weight(1f).heightIn(min = 56.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp)) { Text("📦 Material", fontSize = 15.sp, fontWeight = FontWeight.Bold) }
     }
 }
 
@@ -184,7 +185,7 @@ fun NotesList(date: LocalDate, sites: Map<Long, SiteRow>, version: Int, onEdit: 
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White).clickable { onEdit(n) }.padding(12.dp),
         ) {
-            Text(n.siteId?.let { sites[it]?.name } ?: "Ohne Baustelle", fontWeight = FontWeight.Bold)
+            Text((if (n.kind == "material") "📦 Material · " else "") + (n.siteId?.let { sites[it]?.name } ?: "Ohne Baustelle"), fontWeight = FontWeight.Bold)
             Text(n.text, color = Color(0xFF3A3F45))
             Text("Tippen zum Ändern", color = Color(0xFF6A6F75), fontSize = 12.sp)
         }

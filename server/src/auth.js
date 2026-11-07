@@ -84,6 +84,7 @@ export function publicUser(row) {
     language: row.language,
     role: row.role,
     uses_private_car: !!row.uses_private_car,
+    can_receipts: row.role === 'admin' || !!row.can_receipts,
     active: !!row.active,
   };
 }
