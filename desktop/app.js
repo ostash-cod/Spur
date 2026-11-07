@@ -1187,11 +1187,12 @@ async function tagesansicht(main, userId, dateStr) {
   const [yy, mm, dd] = date.split('-').map(Number);
   const from = new Date(yy, mm - 1, dd).getTime();
   const to = new Date(yy, mm - 1, dd + 1).getTime();
-  const [days, sites, notes, photos] = await Promise.all([
+  const [days, sites, notes, photos, sheets] = await Promise.all([
     api(`/days?user_id=${userId}&from=${from}&to=${to}`),
     api('/sites?all=1'),
     api(`/notes?from=${date}&to=${date}&user_id=${userId}`).catch(() => []),
     api(`/photos?from=${from}&to=${to}&user_id=${userId}`).catch(() => []),
+    api(`/sheets?from=${date}&to=${date}&user_id=${userId}`).catch(() => []),
   ]);
   const siteById = new Map(sites.map((x) => [x.id, x]));
   // Ort eines Fotos: der gespeicherte, sonst der Abschnitt, in dem es aufgenommen wurde.
@@ -1213,6 +1214,23 @@ async function tagesansicht(main, userId, dateStr) {
     return h('div', { style: 'display:inline-block;margin:0 10px 10px 0;vertical-align:top' }, img,
       h('div', { class: 'hint' }, `${fmtTime(p.taken_at)}${photoSite(p) ? ' · ' + photoSite(p) : ''}`));
   };
+  const sheetCard = sheets.length
+    ? (() => {
+        const sh = sheets[0];
+        const paid = Math.max(0, sh.end - sh.start - sh.pause_min * 60000);
+        const kmPriv = sh.lines.filter((l) => l.kind === 'travel' && l.vehicle === 'privat').reduce((a, l) => a + (l.km ?? 0), 0);
+        const label = (l) => (l.kind === 'work' ? siteById.get(l.site_id)?.name ?? 'Baustelle' : { travel: 'Fahrt', break: 'Pause', private: 'Privat' }[l.kind]);
+        return h('div', { class: 'card' },
+          h('h2', {}, `Zettel vom Mitarbeiter · ${fmtTime(sh.start)} bis ${fmtTime(sh.end)}`),
+          h('p', { class: 'hint' }, `Abgegeben ${fmtTime(sh.submitted_at)} Uhr`),
+          h('table', {}, h('tbody', {}, ...sh.lines.map((l) => h('tr', {},
+            h('td', {}, `${fmtTime(l.from)} bis ${fmtTime(l.to)}`),
+            h('td', {}, label(l)),
+            h('td', {}, l.kind === 'travel' ? (l.vehicle === 'firma' ? 'Firmenauto' : 'Privatauto') : ''),
+            h('td', {}, l.kind === 'travel' && l.km != null ? `${String(l.km).replace('.', ',')} km` : ''))))),
+          h('p', {}, h('strong', {}, `Pause ${sh.pause_min} Min · bezahlt ${fmtDuration(paid)} · Privatauto ${kmPriv.toFixed(1).replace('.', ',')} km`)));
+      })()
+    : null;
   const notesCard = notes.length || photos.length
     ? h('div', { class: 'card' },
         h('h2', {}, 'Notizen und Fotos'),
@@ -1247,6 +1265,7 @@ async function tagesansicht(main, userId, dateStr) {
         );
       })
     : [h('div', { class: 'card placeholder' }, 'An diesem Tag wurde nichts aufgezeichnet.')];
+  if (sheetCard) cards.unshift(sheetCard);
   if (notesCard) cards.push(notesCard);
 
   main.replaceChildren(

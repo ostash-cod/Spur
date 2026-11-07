@@ -210,7 +210,7 @@ fun LoginScreen(onDone: () -> Unit) {
     }
 }
 
-private fun formatDuration(ms: Long): String {
+fun formatDuration(ms: Long): String {
     val minutes = (ms / 60_000).coerceAtLeast(0)
     return "%d:%02d".format(minutes / 60, minutes % 60)
 }
@@ -226,6 +226,7 @@ fun MainScreen() {
     val db = remember { Db.get(ctx) }
     var tab by remember { mutableIntStateOf(0) }
     var confirmStop by remember { mutableStateOf(false) }
+    var sheetDayId by remember { mutableStateOf<Long?>(null) }
     var permissionHint by remember { mutableStateOf(false) }
     var pendingSite by remember { mutableStateOf<Long?>(null) }
     var confirmEndSite by remember { mutableStateOf<SiteRow?>(null) }
@@ -573,6 +574,11 @@ fun MainScreen() {
         NewSiteDialog(onDismiss = { showNewSite = false }, onCreated = { showNewSite = false })
     }
 
+    sheetDayId?.let { id ->
+        val d = remember(id, now / 5000) { db.dayById(id) }
+        if (d != null) SheetDialog(d, now, siteMap, onDismiss = { sheetDayId = null })
+    }
+
     if (confirmStop) {
         AlertDialog(
             onDismissRequest = { confirmStop = false },
@@ -582,6 +588,7 @@ fun MainScreen() {
                 TextButton(onClick = {
                     confirmStop = false
                     TrackingService.stop(ctx)
+                    sheetDayId = latestDay?.id
                 }) { Text("Ja, beenden", color = Rot, fontWeight = FontWeight.Bold) }
             },
             dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Abbrechen") } },
@@ -655,6 +662,12 @@ fun TodayScreen(
         val takePhoto = rememberPhotoTaker(runningId) { photoMsg = true }
         PhotoNoteButtons(onPhoto = takePhoto, onNote = { noteDialog = LocalDate.now() to runningId })
         if (photoMsg) Text("Foto gespeichert. Es wird hochgeladen, sobald Internet da ist.", color = Gruen, fontSize = 14.sp)
+        run {
+            val z = ZoneId.systemDefault()
+            val d0 = LocalDate.now().atStartOfDay(z).toInstant().toEpochMilli()
+            val today = Db.get(ctx).daysOnDate(d0, d0 + 86_400_000L).lastOrNull()
+            if (today != null) SheetButton(today, now, sites.associateBy { it.id })
+        }
         NotesList(LocalDate.now(), sites.associateBy { it.id }, notesVersion) { n -> noteDialog = LocalDate.now() to n.siteId }
         noteDialog?.let { (d, sid) ->
             NoteDialog(d, sid, sites, onDismiss = { noteDialog = null; notesVersion++ })
@@ -777,6 +790,7 @@ fun PastDayScreen(date: LocalDate, now: Long, db: Db, siteMap: Map<Long, SiteRow
             )
             val blocks = buildTimeline(d.startedAt, d.endedAt, now, db.segmentsOfDay(d.id), siteMap)
             if (blocks.isEmpty()) Text("Keine Baustelle gebucht.", color = Color(0xFF6A6F75)) else DayTimeline(blocks)
+            SheetButton(d, now, siteMap)
         }
         var noteDialog by remember { mutableStateOf<Pair<LocalDate, Long?>?>(null) }
         var notesVersion by remember { mutableIntStateOf(0) }

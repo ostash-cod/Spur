@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS notes (
   UNIQUE (user_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS notes_date ON notes (date);
+CREATE TABLE IF NOT EXISTS sheets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  date TEXT NOT NULL,
+  submitted_at INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  UNIQUE (user_id, date)
+);
 CREATE TABLE IF NOT EXISTS photos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id),

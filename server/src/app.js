@@ -6,6 +6,7 @@ import fastifyStatic from '@fastify/static';
 import { registerSiteRoutes } from './sites.js';
 import { registerReportRoutes } from './report-routes.js';
 import { registerNoteRoutes } from './notes.js';
+import { registerSheetRoutes } from './sheets.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
@@ -387,6 +388,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });
   registerReportRoutes(app, { db, requireAdmin });
   registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
+  registerSheetRoutes(app, { db, requireUser });
 
   app.get('/api/health', async () => ({ ok: true }));
 

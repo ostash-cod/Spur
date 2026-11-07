@@ -73,7 +73,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 6) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 7) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -98,6 +98,13 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         )
         createSiteTables(db)
         createNoteTables(db)
+        createSheetTables(db)
+    }
+
+    private fun createSheetTables(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS trip_marks (day_id INTEGER NOT NULL, start_ts INTEGER NOT NULL, vehicle TEXT NOT NULL, km REAL, PRIMARY KEY (day_id, start_ts))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS day_pause (day_id INTEGER PRIMARY KEY, minutes INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS sheet_outbox (date TEXT PRIMARY KEY, json TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
     }
 
     private fun createNoteTables(db: SQLiteDatabase) {
@@ -163,6 +170,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         createNoteTables(db)
+        createSheetTables(db)
         if (oldVersion < 2) createSiteTables(db)
         if (oldVersion in 2..2) db.execSQL("ALTER TABLE sites ADD COLUMN system TEXT")
         if (oldVersion in 2..3) db.execSQL("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'")
@@ -174,6 +182,10 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         }
         if (!hasExtra) db.execSQL("ALTER TABLE sites ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
     }
+
+    fun dayById(id: Long): DayRow? =
+        readableDatabase.rawQuery("SELECT $dayColumns FROM days WHERE id = ?", arrayOf(id.toString()))
+            .use { c -> if (c.moveToFirst()) day(c) else null }
 
     private fun day(c: Cursor) = DayRow(
         id = c.getLong(0),
@@ -497,6 +509,49 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         }
         writableDatabase.insertWithOnConflict("sites", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
+
+    // ---- Tageszettel ----
+    data class TripMark(val vehicle: String, val km: Double?)
+
+    fun tripMark(dayId: Long, startTs: Long): TripMark? =
+        readableDatabase.rawQuery("SELECT vehicle, km FROM trip_marks WHERE day_id = ? AND start_ts = ?", arrayOf(dayId.toString(), startTs.toString()))
+            .use { c -> if (c.moveToFirst()) TripMark(c.getString(0), if (c.isNull(1)) null else c.getDouble(1)) else null }
+
+    fun saveTripMark(dayId: Long, startTs: Long, vehicle: String, km: Double?) {
+        writableDatabase.execSQL(
+            "INSERT OR REPLACE INTO trip_marks (day_id, start_ts, vehicle, km) VALUES (?, ?, ?, ?)",
+            arrayOf<Any?>(dayId, startTs, vehicle, km),
+        )
+    }
+
+    /** Zuletzt gewähltes Fahrzeug, als Vorschlag für die nächste Fahrt. */
+    fun lastVehicle(): String =
+        readableDatabase.rawQuery("SELECT vehicle FROM trip_marks ORDER BY rowid DESC LIMIT 1", null)
+            .use { c -> if (c.moveToFirst()) c.getString(0) else "privat" }
+
+    fun dayPause(dayId: Long): Int? =
+        readableDatabase.rawQuery("SELECT minutes FROM day_pause WHERE day_id = ?", arrayOf(dayId.toString()))
+            .use { c -> if (c.moveToFirst()) c.getInt(0) else null }
+
+    fun saveDayPause(dayId: Long, minutes: Int) {
+        writableDatabase.execSQL("INSERT OR REPLACE INTO day_pause (day_id, minutes) VALUES (?, ?)", arrayOf<Any>(dayId, minutes))
+    }
+
+    fun queueSheet(date: String, json: String) {
+        writableDatabase.execSQL("INSERT OR REPLACE INTO sheet_outbox (date, json, sent) VALUES (?, ?, 0)", arrayOf<Any>(date, json))
+    }
+
+    fun unsentSheets(): List<Pair<String, String>> =
+        readableDatabase.rawQuery("SELECT date, json FROM sheet_outbox WHERE sent = 0", null)
+            .use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getString(1)) } }
+
+    fun sheetSent(date: String, json: String) {
+        writableDatabase.execSQL("UPDATE sheet_outbox SET sent = 1 WHERE date = ? AND json = ?", arrayOf<Any>(date, json))
+    }
+
+    fun sheetState(date: String): Int? = // null = nie abgegeben, 0 = vorgemerkt, 1 = gesendet
+        readableDatabase.rawQuery("SELECT sent FROM sheet_outbox WHERE date = ?", arrayOf(date))
+            .use { c -> if (c.moveToFirst()) c.getInt(0) else null }
 
     // ---- Notizen und Fotos ----
     data class NoteRow(val id: Long, val clientId: String, val date: String, val siteId: Long?, val text: String)

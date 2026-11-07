@@ -92,6 +92,15 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                     for (s in segments) db.clearSegmentDirty(s.id, s.endedAt)
                 }
             }
+            for ((date, json) in db.unsentSheets()) {
+                try {
+                    Api.post(ctx, "/api/sheets", JSONObject(json), token)
+                    db.sheetSent(date, json)
+                } catch (e: Api.ApiException) {
+                    if (e.code != 400) throw e
+                    db.sheetSent(date, json)
+                }
+            }
             for (n in db.unsyncedNotes()) {
                 try {
                     Api.post(
