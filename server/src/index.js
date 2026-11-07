@@ -27,6 +27,7 @@ if (!hasUsers) {
 const app = await buildApp({
   db,
   staticDir: join(here, '..', '..', 'desktop'),
+  photoDir: join(dataDir, 'photos'),
   logger: { level: 'info', redact: ['req.headers.authorization'] },
 });
 await app.listen({ port, host });

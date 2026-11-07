@@ -649,6 +649,17 @@ fun TodayScreen(
             modifier = Modifier.fillMaxWidth().height(110.dp),
         ) { Text(if (running) "Tag beenden" else "Tag starten", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold) }
 
+        var noteDialog by remember { mutableStateOf<Pair<LocalDate, Long?>?>(null) }
+        var notesVersion by remember { mutableIntStateOf(0) }
+        var photoMsg by remember { mutableStateOf(false) }
+        val takePhoto = rememberPhotoTaker(runningId) { photoMsg = true }
+        PhotoNoteButtons(onPhoto = takePhoto, onNote = { noteDialog = LocalDate.now() to runningId })
+        if (photoMsg) Text("Foto gespeichert. Es wird hochgeladen, sobald Internet da ist.", color = Gruen, fontSize = 14.sp)
+        NotesList(LocalDate.now(), sites.associateBy { it.id }, notesVersion) { n -> noteDialog = LocalDate.now() to n.siteId }
+        noteDialog?.let { (d, sid) ->
+            NoteDialog(d, sid, sites, onDismiss = { noteDialog = null; notesVersion++ })
+        }
+
         if (permissionHint) {
             Text(
                 "Ohne Standortfreigabe kann Spur den Weg nicht aufzeichnen. Bitte unter Einstellungen den Standort erlauben.",
@@ -767,6 +778,11 @@ fun PastDayScreen(date: LocalDate, now: Long, db: Db, siteMap: Map<Long, SiteRow
             val blocks = buildTimeline(d.startedAt, d.endedAt, now, db.segmentsOfDay(d.id), siteMap)
             if (blocks.isEmpty()) Text("Keine Baustelle gebucht.", color = Color(0xFF6A6F75)) else DayTimeline(blocks)
         }
+        var noteDialog by remember { mutableStateOf<Pair<LocalDate, Long?>?>(null) }
+        var notesVersion by remember { mutableIntStateOf(0) }
+        PhotoNoteButtons(onPhoto = null, onNote = { noteDialog = date to null })
+        NotesList(date, siteMap, notesVersion) { n -> noteDialog = date to n.siteId }
+        noteDialog?.let { (d, sid) -> NoteDialog(d, sid, siteMap.values.toList(), onDismiss = { noteDialog = null; notesVersion++ }) }
         Text("Wische nach links oder tippe auf „Heute“, um zum heutigen Tag zurückzukehren.", color = Color(0xFF6A6F75), fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
     }

@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import { registerSiteRoutes } from './sites.js';
 import { registerReportRoutes } from './report-routes.js';
+import { registerNoteRoutes } from './notes.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
 import {
   candidateHashes,
@@ -70,7 +73,8 @@ function positiveNumber(label) {
   };
 }
 
-export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDir } = {}) {
+export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDir, photoDir } = {}) {
+  const PHOTO_DIR = photoDir ?? process.env.SPUR_PHOTO_DIR ?? mkdtempSync(join(tmpdir(), 'spur-photos-'));
   const APK_DIR = apkDir ?? process.env.SPUR_APK_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'apk');
   // Hinter dem Webserver (Caddy) kommt die echte Adresse des Handys im Kopf der Anfrage.
   const app = Fastify({ logger, trustProxy: process.env.SPUR_TRUST_PROXY === '1' });
@@ -382,6 +386,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
 
   registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });
   registerReportRoutes(app, { db, requireAdmin });
+  registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
 
   app.get('/api/health', async () => ({ ok: true }));
 

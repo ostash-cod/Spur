@@ -76,6 +76,28 @@ CREATE TABLE IF NOT EXISTS sites (
   archived INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE TABLE IF NOT EXISTS notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  client_id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  site_id INTEGER REFERENCES sites(id),
+  text TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (user_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS notes_date ON notes (date);
+CREATE TABLE IF NOT EXISTS photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  client_id TEXT NOT NULL,
+  site_id INTEGER REFERENCES sites(id),
+  taken_at INTEGER NOT NULL,
+  file TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  UNIQUE (user_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS photos_taken ON photos (taken_at);
 CREATE TABLE IF NOT EXISTS site_points (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,

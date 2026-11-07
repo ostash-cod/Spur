@@ -92,6 +92,34 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                     for (s in segments) db.clearSegmentDirty(s.id, s.endedAt)
                 }
             }
+            for (n in db.unsyncedNotes()) {
+                try {
+                    Api.post(
+                        ctx, "/api/notes",
+                        JSONObject().put("client_id", n.clientId).put("date", n.date)
+                            .put("site_id", n.siteId ?: JSONObject.NULL).put("text", n.text)
+                            .put("updated_at", System.currentTimeMillis()),
+                        token,
+                    )
+                    if (n.text.isEmpty()) db.deleteNoteRow(n.id) else db.markNoteSynced(n.id, n.text)
+                } catch (e: Api.ApiException) {
+                    if (e.code != 400) throw e
+                    db.markNoteSynced(n.id, n.text)
+                }
+            }
+            for (p in db.unsyncedPhotos()) {
+                val f = java.io.File(p.path)
+                if (!f.exists()) { db.markPhotoSynced(p.id); continue }
+                try {
+                    val headers = mutableMapOf("x-client-id" to p.clientId, "x-taken-at" to p.takenAt.toString())
+                    if (p.siteId != null) headers["x-site-id"] = p.siteId.toString()
+                    Api.postBytes(ctx, "/api/photos", f.readBytes(), "image/jpeg", headers, token)
+                    db.markPhotoSynced(p.id)
+                } catch (e: Api.ApiException) {
+                    if (e.code != 400) throw e
+                    db.markPhotoSynced(p.id)
+                }
+            }
             Prefs.setLastSync(ctx, System.currentTimeMillis())
             Result.success()
         } catch (e: Api.ApiException) {

@@ -73,7 +73,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 5) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 6) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -97,6 +97,29 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                 UNIQUE(day_id, ts))""",
         )
         createSiteTables(db)
+        createNoteTables(db)
+    }
+
+    private fun createNoteTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL UNIQUE,
+                date TEXT NOT NULL,
+                site_id INTEGER,
+                text TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                synced INTEGER NOT NULL DEFAULT 0)""",
+        )
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id TEXT NOT NULL UNIQUE,
+                path TEXT NOT NULL,
+                site_id INTEGER,
+                taken_at INTEGER NOT NULL,
+                synced INTEGER NOT NULL DEFAULT 0)""",
+        )
     }
 
     private fun createSiteTables(db: SQLiteDatabase) {
@@ -139,6 +162,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        createNoteTables(db)
         if (oldVersion < 2) createSiteTables(db)
         if (oldVersion in 2..2) db.execSQL("ALTER TABLE sites ADD COLUMN system TEXT")
         if (oldVersion in 2..3) db.execSQL("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'")
@@ -473,6 +497,59 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         }
         writableDatabase.insertWithOnConflict("sites", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
+
+    // ---- Notizen und Fotos ----
+    data class NoteRow(val id: Long, val clientId: String, val date: String, val siteId: Long?, val text: String)
+    data class PhotoRow(val id: Long, val clientId: String, val path: String, val siteId: Long?, val takenAt: Long)
+
+    private fun noteFrom(c: android.database.Cursor) =
+        NoteRow(c.getLong(0), c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getLong(3), c.getString(4))
+
+    fun notesForDate(date: String): List<NoteRow> =
+        readableDatabase.rawQuery("SELECT id, client_id, date, site_id, text FROM notes WHERE date = ? ORDER BY id", arrayOf(date))
+            .use { c -> buildList { while (c.moveToNext()) add(noteFrom(c)) } }
+
+    /** Speichert (oder ändert) die Notiz für Tag und Ort. Leerer Text löscht sie. */
+    fun saveNote(date: String, siteId: Long?, text: String) {
+        val cid = "note-$date-${siteId ?: 0}"
+        val t = text.trim()
+        writableDatabase.execSQL(
+            """INSERT INTO notes (client_id, date, site_id, text, updated_at, synced) VALUES (?, ?, ?, ?, ?, 0)
+               ON CONFLICT(client_id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at, synced = 0""",
+            arrayOf<Any?>(cid, date, siteId, t, System.currentTimeMillis()),
+        )
+    }
+
+    fun unsyncedNotes(): List<NoteRow> =
+        readableDatabase.rawQuery("SELECT id, client_id, date, site_id, text FROM notes WHERE synced = 0 ORDER BY id", null)
+            .use { c -> buildList { while (c.moveToNext()) add(noteFrom(c)) } }
+
+    fun markNoteSynced(id: Long, text: String) {
+        writableDatabase.execSQL("UPDATE notes SET synced = 1 WHERE id = ? AND text = ?", arrayOf<Any>(id, text))
+    }
+
+    fun deleteNoteRow(id: Long) {
+        writableDatabase.execSQL("DELETE FROM notes WHERE id = ?", arrayOf<Any>(id))
+    }
+
+    fun addPhoto(clientId: String, path: String, siteId: Long?, takenAt: Long) {
+        writableDatabase.execSQL(
+            "INSERT OR IGNORE INTO photos (client_id, path, site_id, taken_at, synced) VALUES (?, ?, ?, ?, 0)",
+            arrayOf<Any?>(clientId, path, siteId, takenAt),
+        )
+    }
+
+    fun unsyncedPhotos(): List<PhotoRow> =
+        readableDatabase.rawQuery("SELECT id, client_id, path, site_id, taken_at FROM photos WHERE synced = 0 ORDER BY id", null)
+            .use { c -> buildList { while (c.moveToNext()) add(PhotoRow(c.getLong(0), c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getLong(3), c.getLong(4))) } }
+
+    fun markPhotoSynced(id: Long) {
+        writableDatabase.execSQL("UPDATE photos SET synced = 1 WHERE id = ?", arrayOf<Any>(id))
+    }
+
+    fun photoCountForDate(from: Long, to: Long): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM photos WHERE taken_at >= ? AND taken_at < ?", arrayOf(from.toString(), to.toString()))
+            .use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
     @Synchronized
     fun setSiteExtra(siteId: Long, extra: String) {

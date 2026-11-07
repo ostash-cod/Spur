@@ -1187,8 +1187,40 @@ async function tagesansicht(main, userId, dateStr) {
   const [yy, mm, dd] = date.split('-').map(Number);
   const from = new Date(yy, mm - 1, dd).getTime();
   const to = new Date(yy, mm - 1, dd + 1).getTime();
-  const [days, sites] = await Promise.all([api(`/days?user_id=${userId}&from=${from}&to=${to}`), api('/sites?all=1')]);
+  const [days, sites, notes, photos] = await Promise.all([
+    api(`/days?user_id=${userId}&from=${from}&to=${to}`),
+    api('/sites?all=1'),
+    api(`/notes?from=${date}&to=${date}&user_id=${userId}`).catch(() => []),
+    api(`/photos?from=${from}&to=${to}&user_id=${userId}`).catch(() => []),
+  ]);
   const siteById = new Map(sites.map((x) => [x.id, x]));
+  // Ort eines Fotos: der gespeicherte, sonst der Abschnitt, in dem es aufgenommen wurde.
+  const photoSite = (p) => {
+    if (p.site_id) return siteById.get(p.site_id)?.name;
+    for (const d of days) for (const sg of d.segments ?? []) {
+      if (sg.site_id && sg.started_at <= p.taken_at && p.taken_at <= (sg.ended_at ?? Date.now())) return siteById.get(sg.site_id)?.name;
+    }
+    return null;
+  };
+  const photoView = (p) => {
+    const img = h('img', { alt: 'Foto', style: 'width:160px;height:120px;object-fit:cover;border-radius:8px;cursor:pointer;background:#eee' });
+    const load = async () => {
+      const res = await fetch(`/api/photos/${p.id}/file`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('Foto nicht ladbar');
+      return URL.createObjectURL(await res.blob());
+    };
+    load().then((u) => { img.src = u; img.onclick = () => window.open(u, '_blank'); }).catch(() => {});
+    return h('div', { style: 'display:inline-block;margin:0 10px 10px 0;vertical-align:top' }, img,
+      h('div', { class: 'hint' }, `${fmtTime(p.taken_at)}${photoSite(p) ? ' · ' + photoSite(p) : ''}`));
+  };
+  const notesCard = notes.length || photos.length
+    ? h('div', { class: 'card' },
+        h('h2', {}, 'Notizen und Fotos'),
+        ...notes.map((n) => h('div', { style: 'margin:0 0 10px' },
+          h('strong', {}, n.site_id ? siteById.get(n.site_id)?.name ?? 'Baustelle' : 'Ohne Baustelle'),
+          h('div', { style: 'white-space:pre-wrap' }, n.text))),
+        photos.length ? h('div', {}, ...photos.map(photoView)) : '')
+    : null;
 
   const go = (offset) => {
     location.hash = `#/mitarbeiter/${userId}/${toDateStr(new Date(yy, mm - 1, dd + offset))}`;
@@ -1215,6 +1247,7 @@ async function tagesansicht(main, userId, dateStr) {
         );
       })
     : [h('div', { class: 'card placeholder' }, 'An diesem Tag wurde nichts aufgezeichnet.')];
+  if (notesCard) cards.push(notesCard);
 
   main.replaceChildren(
     h('p', { class: 'hint' }, h('a', { href: '#/mitarbeiter' }, '← Alle Mitarbeiter')),
