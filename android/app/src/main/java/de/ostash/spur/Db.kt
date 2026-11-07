@@ -73,7 +73,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 7) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 8) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
