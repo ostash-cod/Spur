@@ -668,9 +668,10 @@ fun TodayScreen(
             val today = Db.get(ctx).daysOnDate(d0, d0 + 86_400_000L).lastOrNull()
             if (today != null) SheetButton(today, now, sites.associateBy { it.id })
         }
+        WeekSubmitButton(now, sites.associateBy { it.id })
         NotesList(LocalDate.now(), sites.associateBy { it.id }, notesVersion) { n -> noteDialog = LocalDate.now() to n.siteId }
         noteDialog?.let { (d, sid) ->
-            NoteDialog(d, sid, sites, onDismiss = { noteDialog = null; notesVersion++ })
+            NoteDialog(d, sid, sites.associateBy { it.id }, onDismiss = { noteDialog = null; notesVersion++ })
         }
 
         if (permissionHint) {
@@ -778,6 +779,13 @@ fun PastDayScreen(date: LocalDate, now: Long, db: Db, siteMap: Map<Long, SiteRow
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        var noteDialog by remember { mutableStateOf<Pair<LocalDate, Long?>?>(null) }
+        var notesVersion by remember { mutableIntStateOf(0) }
+        val ctx = LocalContext.current
+        val locked = isDayLocked(db, date)
+        if (!locked) PhotoNoteButtons(onPhoto = null, onNote = { noteDialog = date to null })
+        NotesList(date, siteMap, notesVersion) { n -> if (!locked) noteDialog = date to n.siteId }
+        noteDialog?.let { (d, sid) -> NoteDialog(d, sid, siteMap, onDismiss = { noteDialog = null; notesVersion++ }) }
         if (days.isEmpty()) {
             Text("An diesem Tag wurde nichts aufgezeichnet.", color = Color(0xFF6A6F75))
         }
@@ -792,11 +800,6 @@ fun PastDayScreen(date: LocalDate, now: Long, db: Db, siteMap: Map<Long, SiteRow
             if (blocks.isEmpty()) Text("Keine Baustelle gebucht.", color = Color(0xFF6A6F75)) else DayTimeline(blocks)
             SheetButton(d, now, siteMap)
         }
-        var noteDialog by remember { mutableStateOf<Pair<LocalDate, Long?>?>(null) }
-        var notesVersion by remember { mutableIntStateOf(0) }
-        PhotoNoteButtons(onPhoto = null, onNote = { noteDialog = date to null })
-        NotesList(date, siteMap, notesVersion) { n -> noteDialog = date to n.siteId }
-        noteDialog?.let { (d, sid) -> NoteDialog(d, sid, siteMap.values.toList(), onDismiss = { noteDialog = null; notesVersion++ }) }
         Text("Wische nach links oder tippe auf „Heute“, um zum heutigen Tag zurückzukehren.", color = Color(0xFF6A6F75), fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
     }

@@ -105,35 +105,44 @@ fun shrinkJpeg(src: File, dst: File): Boolean = try {
     false
 }
 
-/** Notiz schreiben oder ändern. Tag (heute bis 5 Tage zurück) und Ort sind wählbar. */
+/** Baustellen, die für Notizen dieses Tages zur Wahl stehen: die an diesem Tag angefahrenen (und die schon eine Notiz haben). */
+fun noteSiteChoices(db: Db, date: LocalDate, sites: Map<Long, SiteRow>, extra: Long?): List<SiteRow> {
+    val z = java.time.ZoneId.systemDefault()
+    val from = date.atStartOfDay(z).toInstant().toEpochMilli()
+    val ids = LinkedHashSet<Long>()
+    ids.addAll(db.siteIdsWorkedOn(from, from + 86_400_000L))
+    db.notesForDate(date.toString()).forEach { n -> n.siteId?.let { ids.add(it) } }
+    if (extra != null) ids.add(extra)
+    return ids.mapNotNull { sites[it] }.filter { it.system == null }
+}
+
+/** Notiz zu einem Tag. Gibt es nur eine Baustelle, ist sie gleich gewählt; bei mehreren tippt man die richtige an. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun NoteDialog(startDate: LocalDate, startSiteId: Long?, sites: List<SiteRow>, onDismiss: () -> Unit) {
+fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { Db.get(ctx) }
-    var date by remember { mutableStateOf(startDate) }
-    var siteId by remember { mutableStateOf(startSiteId) }
-    var reload by remember { mutableIntStateOf(0) }
-    val saved = remember(date, siteId, reload) { db.notesForDate(date.toString()).firstOrNull { it.siteId == siteId }?.text ?: "" }
+    val choices = remember(date) { noteSiteChoices(db, date, sites, startSiteId) }
+    var siteId by remember { mutableStateOf(startSiteId ?: choices.firstOrNull()?.id) }
+    val saved = remember(date, siteId) { db.notesForDate(date.toString()).firstOrNull { it.siteId == siteId }?.text ?: "" }
     var text by remember(date, siteId) { mutableStateOf(saved) }
-    val today = LocalDate.now()
-    val choices = sites.filter { it.system == null && it.kind != "haendler" }
+    val dayName = when (date) {
+        LocalDate.now() -> "heute"
+        LocalDate.now().minusDays(1) -> "gestern"
+        else -> date.format(dayFmt)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Notiz zur Arbeit") },
+        title = { Text("Notiz für $dayName") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Tag", fontWeight = FontWeight.Bold)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (i in 0..5) {
-                        val d = today.minusDays(i.toLong())
-                        FilterChip(selected = d == date, onClick = { date = d }, label = { Text(if (i == 0) "Heute" else if (i == 1) "Gestern" else d.format(dayFmt)) })
+                if (choices.size > 1) {
+                    Text("Baustelle", fontWeight = FontWeight.Bold)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (s in choices) FilterChip(selected = siteId == s.id, onClick = { siteId = s.id }, label = { Text(s.name) })
                     }
-                }
-                Text("Baustelle", fontWeight = FontWeight.Bold)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = siteId == null, onClick = { siteId = null }, label = { Text("Ohne Baustelle") })
-                    for (s in choices) FilterChip(selected = siteId == s.id, onClick = { siteId = s.id }, label = { Text(s.name) })
+                } else if (choices.size == 1) {
+                    Text(choices[0].name, fontWeight = FontWeight.Bold)
                 }
                 OutlinedTextField(
                     value = text,
@@ -148,7 +157,6 @@ fun NoteDialog(startDate: LocalDate, startSiteId: Long?, sites: List<SiteRow>, o
             Button(onClick = {
                 db.saveNote(date.toString(), siteId, text)
                 SyncWorker.enqueue(ctx)
-                reload++
                 onDismiss()
             }) { Text("Speichern") }
         },

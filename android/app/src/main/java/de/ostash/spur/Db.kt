@@ -103,6 +103,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
 
     private fun createSheetTables(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS trip_marks (day_id INTEGER NOT NULL, start_ts INTEGER NOT NULL, vehicle TEXT NOT NULL, km REAL, PRIMARY KEY (day_id, start_ts))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS week_closed (week_start TEXT PRIMARY KEY)")
         db.execSQL("CREATE TABLE IF NOT EXISTS day_pause (day_id INTEGER PRIMARY KEY, minutes INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS sheet_outbox (date TEXT PRIMARY KEY, json TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
     }
@@ -536,6 +537,21 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     fun saveDayPause(dayId: Long, minutes: Int) {
         writableDatabase.execSQL("INSERT OR REPLACE INTO day_pause (day_id, minutes) VALUES (?, ?)", arrayOf<Any>(dayId, minutes))
     }
+
+    fun closeWeek(weekStart: String) {
+        writableDatabase.execSQL("INSERT OR IGNORE INTO week_closed (week_start) VALUES (?)", arrayOf<Any>(weekStart))
+    }
+
+    fun isWeekClosed(weekStart: String): Boolean =
+        readableDatabase.rawQuery("SELECT 1 FROM week_closed WHERE week_start = ?", arrayOf(weekStart)).use { it.moveToFirst() }
+
+    /** Baustellen, auf denen an diesem Tag gearbeitet wurde (aus den Abschnitten aller Tage dieses Datums). */
+    fun siteIdsWorkedOn(fromMs: Long, toMs: Long): List<Long> =
+        readableDatabase.rawQuery(
+            """SELECT DISTINCT s.site_id FROM segments s JOIN days d ON d.id = s.day_id
+               WHERE d.started_at >= ? AND d.started_at < ? AND s.kind = 'work' AND s.site_id IS NOT NULL ORDER BY s.started_at""",
+            arrayOf(fromMs.toString(), toMs.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
 
     fun queueSheet(date: String, json: String) {
         writableDatabase.execSQL("INSERT OR REPLACE INTO sheet_outbox (date, json, sent) VALUES (?, ?, 0)", arrayOf<Any>(date, json))

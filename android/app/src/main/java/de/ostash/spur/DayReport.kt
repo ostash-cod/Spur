@@ -90,6 +90,38 @@ private fun kmValue(s: String): Double? = s.trim().replace(',', '.').toDoubleOrN
 private val hm = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
 private fun hmOf(ms: Long) = hm.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
 
+/** Montag der Woche, in der das Datum liegt, als Text. */
+fun weekStartOf(date: java.time.LocalDate): String = date.minusDays((date.dayOfWeek.value - 1).toLong()).toString()
+
+/** Ein Tag ist gesperrt, wenn er älter als 7 Tage ist oder seine Woche abgegeben wurde. */
+fun isDayLocked(db: Db, date: java.time.LocalDate): Boolean =
+    date.isBefore(java.time.LocalDate.now().minusDays(7)) || db.isWeekClosed(weekStartOf(date))
+
+/** Zettel aus dem gespeicherten Stand (Fahrzeug, Kilometer, Pause) zusammenstellen und zum Senden vormerken. */
+fun queueSheetFor(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>) {
+    val end = day.endedAt ?: now
+    val lines = sheetLines(db, day, now, siteMap)
+    val brk = db.segmentsOfDay(day.id).filter { it.kind == "break" && it.endedAt != null }.sumOf { it.endedAt!! - it.startedAt }
+    val pauseMin = db.dayPause(day.id) ?: maxOf(pauseRuleMinutes(end - day.startedAt), (brk / 60_000L).toInt())
+    queueSheetJson(db, day, end, pauseMin, lines)
+}
+
+fun queueSheetJson(db: Db, day: DayRow, end: Long, pauseMin: Int, lines: List<SheetLine>) {
+    val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+    val arr = JSONArray()
+    for (l in lines) {
+        val o = JSONObject().put("kind", l.kind).put("from", l.from).put("to", l.to)
+        if (l.siteId != null) o.put("site_id", l.siteId)
+        if (l.kind == "travel") {
+            o.put("vehicle", l.vehicle)
+            kmValue(l.km)?.let { o.put("km", it) }
+        }
+        arr.put(o)
+    }
+    val json = JSONObject().put("date", date).put("start", day.startedAt).put("end", end).put("pause_min", pauseMin).put("lines", arr).toString()
+    db.queueSheet(date, json)
+}
+
 /** Der Zettel zum Tagesende: Abschnitte, Fahrzeug und Kilometer prüfen, Pause einstellen, abgeben. */
 @Composable
 fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: () -> Unit) {
@@ -151,18 +183,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
             Button(onClick = {
                 for (l in lines) if (l.kind == "travel") db.saveTripMark(day.id, l.from, l.vehicle, kmValue(l.km))
                 db.saveDayPause(day.id, pauseMin)
-                val arr = JSONArray()
-                for (l in lines) {
-                    val o = JSONObject().put("kind", l.kind).put("from", l.from).put("to", l.to)
-                    if (l.siteId != null) o.put("site_id", l.siteId)
-                    if (l.kind == "travel") {
-                        o.put("vehicle", l.vehicle)
-                        kmValue(l.km)?.let { o.put("km", it) }
-                    }
-                    arr.put(o)
-                }
-                val json = JSONObject().put("date", date).put("start", day.startedAt).put("end", end).put("pause_min", pauseMin).put("lines", arr).toString()
-                db.queueSheet(date, json)
+                queueSheetJson(db, day, end, pauseMin, lines)
                 SyncWorker.enqueue(ctx)
                 onDismiss()
             }) { Text("Abgeben") }
@@ -175,8 +196,59 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
 @Composable
 fun SheetButton(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>) {
     var open by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate()
+    if (isDayLocked(Db.get(ctx), date)) {
+        Text("Dieser Tag ist abgeschlossen. Änderungen macht nur der Chef.", color = Color(0xFF6A6F75), fontSize = 13.sp)
+        return
+    }
     androidx.compose.material3.OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Text("📋 Zettel für diesen Tag prüfen und abgeben", fontWeight = FontWeight.Bold)
     }
     if (open) SheetDialog(day, now, siteMap, onDismiss = { open = false })
+}
+
+/** Knopf „Woche abgeben“: schickt die Zettel von Montag bis heute ab und sperrt die Woche für Änderungen. */
+@Composable
+fun WeekSubmitButton(now: Long, siteMap: Map<Long, SiteRow>) {
+    val ctx = LocalContext.current
+    val db = remember { Db.get(ctx) }
+    var confirm by remember { mutableStateOf(false) }
+    var doneMsg by remember { mutableStateOf<String?>(null) }
+    val today = java.time.LocalDate.now()
+    val weekStart = weekStartOf(today)
+    if (db.isWeekClosed(weekStart) && doneMsg == null) {
+        Text("Diese Woche ist abgegeben.", color = Color(0xFF6A6F75), fontSize = 13.sp)
+        return
+    }
+    androidx.compose.material3.OutlinedButton(onClick = { confirm = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text("✅ Woche abgeben", fontWeight = FontWeight.Bold)
+    }
+    doneMsg?.let { Text(it, color = Color(0xFF2E7D32), fontSize = 14.sp) }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Woche abgeben?") },
+            text = { Text("Alle Zettel von Montag bis heute gehen an den Chef. Danach kannst du diese Tage nicht mehr ändern.") },
+            confirmButton = {
+                Button(onClick = {
+                    confirm = false
+                    val zone = ZoneId.systemDefault()
+                    val monday = java.time.LocalDate.parse(weekStart)
+                    var n = 0
+                    var d = monday
+                    while (!d.isAfter(today)) {
+                        val from = d.atStartOfDay(zone).toInstant().toEpochMilli()
+                        val to = d.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                        for (day in db.daysOnDate(from, to)) { queueSheetFor(db, day, now, siteMap); n++ }
+                        d = d.plusDays(1)
+                    }
+                    db.closeWeek(weekStart)
+                    SyncWorker.enqueue(ctx)
+                    doneMsg = "Woche abgegeben ($n Tage)."
+                }) { Text("Ja, abgeben") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Abbrechen") } },
+        )
+    }
 }
