@@ -189,7 +189,9 @@ fun DayTimeline(blocks: List<TimelineBlock>) {
         for ((b, top, h) in placed) {
             val bg = if (b.isTravel) Gelb else Color(android.graphics.Color.parseColor(b.colorHex ?: "#B8BCC2"))
             val stripe = b.stripeHex?.let { Color(android.graphics.Color.parseColor(it)) }
-            val fg = if (b.isTravel || stripe != null || bg.luminance() > 0.5f) Dunkel else Color.White
+            // Händler bleiben braun, auch in einer Materialfahrt (dann mit Streifen der Baustelle); Fahrten sind gelb.
+            val base = if (b.isHaendler) bg else Gelb
+            val fg = if (b.isTravel || (stripe != null && !b.isHaendler) || bg.luminance() > 0.5f) Dunkel else Color.White
             Row(
                 Modifier
                     .padding(start = 48.dp)
@@ -201,7 +203,7 @@ fun DayTimeline(blocks: List<TimelineBlock>) {
                         if (stripe != null) {
                             // Materialfahrt: gelb mit diagonalen Streifen in der Farbe der Baustelle
                             Modifier.drawBehind {
-                                drawRect(Gelb)
+                                drawRect(base)
                                 val sw = 9.dp.toPx()
                                 val period = 24.dp.toPx()
                                 var x = -size.height
@@ -221,7 +223,7 @@ fun DayTimeline(blocks: List<TimelineBlock>) {
                     VanIcon()
                     Box(Modifier.width(8.dp))
                 }
-                Column(if (stripe != null) Modifier.background(Gelb.copy(alpha = 0.92f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp) else Modifier) {
+                Column(if (stripe != null) Modifier.background(base.copy(alpha = 0.92f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp) else Modifier) {
                     Text("${b.label} · ${dur(b.end - b.start)}" + (b.stripeText?.let { " · $it" } ?: ""), color = fg, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     if (h >= 44f) {
                         Text(
