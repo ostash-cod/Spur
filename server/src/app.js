@@ -8,6 +8,7 @@ import { registerReportRoutes } from './report-routes.js';
 import { registerNoteRoutes } from './notes.js';
 import { registerSheetRoutes } from './sheets.js';
 import { registerReceiptRoutes } from './receipts.js';
+import { registerPayrollRoutes } from './payroll.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
@@ -392,6 +393,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   registerReportRoutes(app, { db, requireAdmin });
   registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
   registerSheetRoutes(app, { db, requireUser });
+  registerPayrollRoutes(app, { db, requireAdmin });
   registerReceiptRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
 
   app.get('/api/health', async () => ({ ok: true }));

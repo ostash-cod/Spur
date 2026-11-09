@@ -21,6 +21,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,9 +63,56 @@ fun routeKm(points: List<PointRow>, from: Long, to: Long): Double {
 }
 
 /** Eine Zeile des Tageszettels. */
-class SheetLine(val kind: String, val label: String, val siteId: Long?, val from: Long, val to: Long, val autoKm: Double?) {
-    var vehicle: String = "privat"
-    var km: String = ""
+class SheetLine(val kind: String, val label: String, val siteId: Long?, from: Long, to: Long, val autoKm: Double?) {
+    var from by mutableLongStateOf(from)
+    var to by mutableLongStateOf(to)
+    var vehicle by mutableStateOf("privat")
+    var km by mutableStateOf("")
+}
+
+/** Gespeicherten (und eventuell geänderten) Zettel wieder laden. */
+fun savedSheetLines(json: String, siteMap: Map<Long, SiteRow>): List<SheetLine> {
+    val arr = JSONObject(json).getJSONArray("lines")
+    return (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        val kind = o.getString("kind")
+        val siteId = if (o.has("site_id")) o.getLong("site_id") else null
+        val label = when (kind) {
+            "travel" -> "Fahrt"
+            "break" -> "Pause"
+            "private" -> "Privat"
+            else -> siteId?.let { siteMap[it]?.name } ?: "Arbeit"
+        }
+        SheetLine(kind, label, siteId, o.getLong("from"), o.getLong("to"), null).also { l ->
+            if (kind == "travel") {
+                l.vehicle = o.optString("vehicle", "privat")
+                l.km = if (o.has("km")) String.format(java.util.Locale.GERMANY, "%.1f", o.getDouble("km")) else ""
+            }
+        }
+    }
+}
+
+/** Neue Uhrzeit für einen Zeitpunkt (gleicher Tag), über die Uhrzeit-Auswahl des Handys. */
+fun pickTime(ctx: android.content.Context, current: Long, onPicked: (Long) -> Unit) {
+    val z = ZoneId.systemDefault()
+    val t = Instant.ofEpochMilli(current).atZone(z)
+    android.app.TimePickerDialog(ctx, { _, h, m ->
+        onPicked(t.withHour(h).withMinute(m).withSecond(0).withNano(0).toInstant().toEpochMilli())
+    }, t.hour, t.minute, true).show()
+}
+
+/** Zeit einer Zeile ändern; die Nachbarzeile passt sich an, damit keine Lücke entsteht. */
+fun SnapshotStateList<SheetLine>.setBoundary(ctx: android.content.Context, i: Int, isEnd: Boolean, t: Long) {
+    val l = this[i]
+    if (isEnd) {
+        if (t < l.from) { android.widget.Toast.makeText(ctx, "Das Ende liegt vor dem Beginn.", android.widget.Toast.LENGTH_SHORT).show(); return }
+        l.to = t
+        if (i + 1 < size) this[i + 1].from = t.coerceAtMost(this[i + 1].to).also { if (it < t) this[i + 1].to = t }
+    } else {
+        if (t > l.to) { android.widget.Toast.makeText(ctx, "Der Beginn liegt nach dem Ende.", android.widget.Toast.LENGTH_SHORT).show(); return }
+        l.from = t
+        if (i > 0) this[i - 1].to = t.coerceAtLeast(this[i - 1].from).also { if (it > t) this[i - 1].from = t }
+    }
 }
 
 fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>): List<SheetLine> {
@@ -99,14 +148,16 @@ fun isDayLocked(db: Db, date: java.time.LocalDate): Boolean =
 
 /** Zettel aus dem gespeicherten Stand (Fahrzeug, Kilometer, Pause) zusammenstellen und zum Senden vormerken. */
 fun queueSheetFor(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>) {
+    val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+    if (db.sheetState(date) != null) return // schon abgegeben oder vorgemerkt, mit den Änderungen des Mitarbeiters
     val end = day.endedAt ?: now
     val lines = sheetLines(db, day, now, siteMap)
     val brk = db.segmentsOfDay(day.id).filter { it.kind == "break" && it.endedAt != null }.sumOf { it.endedAt!! - it.startedAt }
     val pauseMin = db.dayPause(day.id) ?: maxOf(pauseRuleMinutes(end - day.startedAt), (brk / 60_000L).toInt())
-    queueSheetJson(db, day, end, pauseMin, lines)
+    queueSheetJson(db, day, day.startedAt, end, pauseMin, lines)
 }
 
-fun queueSheetJson(db: Db, day: DayRow, end: Long, pauseMin: Int, lines: List<SheetLine>) {
+fun queueSheetJson(db: Db, day: DayRow, start: Long, end: Long, pauseMin: Int, lines: List<SheetLine>) {
     val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     val arr = JSONArray()
     for (l in lines) {
@@ -118,7 +169,7 @@ fun queueSheetJson(db: Db, day: DayRow, end: Long, pauseMin: Int, lines: List<Sh
         }
         arr.put(o)
     }
-    val json = JSONObject().put("date", date).put("start", day.startedAt).put("end", end).put("pause_min", pauseMin).put("lines", arr).toString()
+    val json = JSONObject().put("date", date).put("start", start).put("end", end).put("pause_min", pauseMin).put("lines", arr).toString()
     db.queueSheet(date, json)
 }
 
@@ -127,26 +178,36 @@ fun queueSheetJson(db: Db, day: DayRow, end: Long, pauseMin: Int, lines: List<Sh
 fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { Db.get(ctx) }
-    val end = day.endedAt ?: now
-    val lines = remember(day.id) { mutableStateListOf<SheetLine>().also { it.addAll(sheetLines(db, day, now, siteMap)) } }
+    val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+    val savedJson = remember(day.id) { db.unsentOrSentSheetJson(date) }
+    val lines = remember(day.id) {
+        mutableStateListOf<SheetLine>().also {
+            it.addAll(if (savedJson != null) savedSheetLines(savedJson, siteMap) else sheetLines(db, day, now, siteMap))
+        }
+    }
     val tick = remember { mutableStateOf(0) }
+    val start = lines.firstOrNull()?.from ?: day.startedAt
+    val end = lines.lastOrNull()?.to ?: (day.endedAt ?: now)
     val brk = db.segmentsOfDay(day.id).filter { it.kind == "break" && it.endedAt != null }.sumOf { it.endedAt!! - it.startedAt }
-    val ruleMin = maxOf(pauseRuleMinutes(end - day.startedAt), (brk / 60_000L).toInt())
+    val ruleMin = maxOf(pauseRuleMinutes(end - start), (brk / 60_000L).toInt())
     var pause by remember(day.id) { mutableStateOf((db.dayPause(day.id) ?: ruleMin).toString()) }
     val pauseMin = pause.trim().toIntOrNull()?.coerceIn(0, 600) ?: 0
-    val paidMs = maxOf(0L, end - day.startedAt - pauseMin * 60_000L)
+    val paidMs = maxOf(0L, end - start - pauseMin * 60_000L)
     val privKm = lines.filter { it.kind == "travel" && it.vehicle == "privat" }.sumOf { kmValue(it.km) ?: 0.0 }
-    val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     val state = db.sheetState(date)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Zettel für den Tag") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("${hmOf(day.startedAt)} bis ${hmOf(end)} Uhr", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                for (l in lines) {
+                Text("${hmOf(start)} bis ${hmOf(end)} Uhr", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                lines.forEachIndexed { i, l ->
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFFF1F3F5)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("${hmOf(l.from)} bis ${hmOf(l.to)} · ${l.label}", fontWeight = FontWeight.Bold)
+                        Text(l.label, fontWeight = FontWeight.Bold)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.from) { t -> lines.setBoundary(ctx, i, false, t); tick.value++ } }) { Text("von ${hmOf(l.from)}") }
+                            androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.to) { t -> lines.setBoundary(ctx, i, true, t); tick.value++ } }) { Text("bis ${hmOf(l.to)}") }
+                        }
                         if (l.kind == "travel") {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FilterChip(selected = l.vehicle == "privat", onClick = { l.vehicle = "privat"; tick.value++ }, label = { Text("Privatauto") })
@@ -183,12 +244,19 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
             Button(onClick = {
                 for (l in lines) if (l.kind == "travel") db.saveTripMark(day.id, l.from, l.vehicle, kmValue(l.km))
                 db.saveDayPause(day.id, pauseMin)
-                queueSheetJson(db, day, end, pauseMin, lines)
+                queueSheetJson(db, day, start, end, pauseMin, lines)
                 SyncWorker.enqueue(ctx)
                 onDismiss()
             }) { Text("Abgeben") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Später") } },
+        dismissButton = {
+            Row {
+                if (savedJson != null) TextButton(onClick = {
+                    lines.clear(); lines.addAll(sheetLines(db, day, now, siteMap)); tick.value++
+                }) { Text("Neu aus dem Tag") }
+                TextButton(onClick = onDismiss) { Text("Später") }
+            }
+        },
     )
 }
 

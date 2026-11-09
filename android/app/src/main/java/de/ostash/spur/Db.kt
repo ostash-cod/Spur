@@ -605,6 +605,10 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         writableDatabase.execSQL("UPDATE sheet_outbox SET sent = 1 WHERE date = ? AND json = ?", arrayOf<Any>(date, json))
     }
 
+    fun unsentOrSentSheetJson(date: String): String? =
+        readableDatabase.rawQuery("SELECT json FROM sheet_outbox WHERE date = ?", arrayOf(date))
+            .use { c -> if (c.moveToFirst()) c.getString(0) else null }
+
     fun sheetState(date: String): Int? = // null = nie abgegeben, 0 = vorgemerkt, 1 = gesendet
         readableDatabase.rawQuery("SELECT sent FROM sheet_outbox WHERE date = ?", arrayOf(date))
             .use { c -> if (c.moveToFirst()) c.getInt(0) else null }

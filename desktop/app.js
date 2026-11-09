@@ -1523,7 +1523,86 @@ async function belege(main, siteArg) {
   }
 }
 
-Object.assign(pages, { mitarbeiter, kunden, berichte, statistik, einstellungen, belege });
+// --- Lohn und Kilometer: Berichte aus den abgegebenen Zetteln --------------------------
+async function lohn(main) {
+  const users = (await api('/users')).filter((u) => u.active && u.role !== 'admin');
+  const today = new Date();
+  const userSel = h('select', { id: 'lk-user' }, users.map((u) => h('option', { value: u.id }, u.name)));
+  const typeSel = h('select', { id: 'lk-typ' }, h('option', { value: 'week' }, 'Woche'), h('option', { value: 'month' }, 'Monat'), h('option', { value: 'range' }, 'Von – Bis'));
+  const dayIn = h('input', { id: 'lk-tag', type: 'date', value: ymd(today) });
+  const monthIn = h('input', { id: 'lk-monat', type: 'month', value: `${today.getFullYear()}-${pad2(today.getMonth() + 1)}` });
+  const fromIn = h('input', { id: 'lk-von', type: 'date', value: ymd(new Date(today.getFullYear(), today.getMonth(), 1)) });
+  const toIn = h('input', { id: 'lk-bis', type: 'date', value: ymd(today) });
+  const rateIn = h('input', { id: 'lk-satz', type: 'text', value: '0,30', style: 'width:80px' });
+  const dayBox = h('div', {}, h('label', {}, 'Ein Tag aus der Woche'), dayIn);
+  const monthBox = h('div', {}, h('label', {}, 'Monat'), monthIn);
+  const rangeBox = h('div', {}, h('label', {}, 'Von'), fromIn, h('label', {}, 'Bis'), toIn);
+  const result = h('div', {});
+  const err = h('p', { class: 'error' });
+  const sync = () => {
+    dayBox.style.display = typeSel.value === 'week' ? '' : 'none';
+    monthBox.style.display = typeSel.value === 'month' ? '' : 'none';
+    rangeBox.style.display = typeSel.value === 'range' ? '' : 'none';
+  };
+  typeSel.onchange = sync;
+  sync();
+
+  const query = () => {
+    const p = reportPeriod(typeSel.value, { day: dayIn.value, month: monthIn.value, from: fromIn.value, to: toIn.value });
+    return `user_id=${userSel.value}&from=${p.from}&to=${p.to}`;
+  };
+  const rate = () => rateIn.value.trim().replace(',', '.') || '0.30';
+  const deDay = (d) => d.split('-').reverse().join('.');
+  const num = (n, d = 2) => Number(n).toFixed(d).replace('.', ',');
+  const download = async (path, extra) => {
+    err.textContent = '';
+    try {
+      const res = await fetch(`/api${path}?${query()}${extra}&format=xlsx`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Fehler beim Herunterladen');
+      const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || 'Bericht.xlsx';
+      const a = h('a', { href: URL.createObjectURL(await res.blob()), download: name });
+      document.body.append(a); a.click(); a.remove();
+    } catch (e) { err.textContent = e.message; }
+  };
+  const show = async () => {
+    err.textContent = '';
+    try {
+      const q = query();
+      const [pay, mil] = await Promise.all([api(`/reports/payroll?${q}`), api(`/reports/mileage?${q}&rate=${rate()}`)]);
+      result.replaceChildren(
+        h('div', { class: 'card' },
+          h('h2', {}, `Lohnzettel · ${pay.user}`),
+          pay.days.length
+            ? h('table', {}, h('thead', {}, h('tr', {}, ...['Datum', 'Beginn', 'Ende', 'Pause (Min)', 'Bezahlt (Std)'].map((t) => h('th', {}, t)))),
+                h('tbody', {}, ...pay.days.map((d) => h('tr', {}, h('td', {}, deDay(d.date)), h('td', {}, fmtTime(d.start)), h('td', {}, fmtTime(d.end)), h('td', {}, String(d.pause_min)), h('td', {}, num(d.paid_hours)))),
+                  h('tr', {}, h('td', {}, h('strong', {}, 'Summe')), h('td', {}), h('td', {}), h('td', {}), h('td', {}, h('strong', {}, num(pay.total_hours))))))
+            : h('p', { class: 'hint' }, 'In diesem Zeitraum wurden keine Zettel abgegeben.'),
+          h('button', { type: 'button', onclick: () => download('/reports/payroll', '') }, 'Excel herunterladen')),
+        h('div', { class: 'card' },
+          h('h2', {}, `Kilometergeld · ${mil.user}`),
+          mil.rows.length
+            ? h('table', {}, h('thead', {}, h('tr', {}, ...['Datum', 'Von', 'Bis', 'Strecke', 'Kilometer', 'Betrag (€)'].map((t) => h('th', {}, t)))),
+                h('tbody', {}, ...mil.rows.map((r) => h('tr', {}, h('td', {}, deDay(r.date)), h('td', {}, fmtTime(r.from_time)), h('td', {}, fmtTime(r.to_time)), h('td', {}, r.route), h('td', {}, num(r.km, 1)), h('td', {}, num(r.amount)))),
+                  h('tr', {}, h('td', {}, h('strong', {}, 'Summe')), h('td', {}), h('td', {}), h('td', {}), h('td', {}, h('strong', {}, num(mil.total_km, 1))), h('td', {}, h('strong', {}, num(mil.total_amount))))))
+            : h('p', { class: 'hint' }, 'Keine Fahrten mit dem Privatauto in diesem Zeitraum.'),
+          h('button', { type: 'button', onclick: () => download('/reports/mileage', `&rate=${rate()}`) }, 'Excel herunterladen')),
+      );
+    } catch (e) { err.textContent = e.message; result.replaceChildren(); }
+  };
+  main.replaceChildren(
+    h('h1', {}, 'Lohn und Kilometer'),
+    h('p', { class: 'hint' }, 'Berechnet aus den Zetteln, die deine Mitarbeiter abgegeben haben. Die Pause ist die Pause auf dem Zettel.'),
+    h('div', { class: 'card' },
+      h('div', { class: 'form-row' }, h('div', {}, h('label', {}, 'Mitarbeiter'), userSel), h('div', {}, h('label', {}, 'Zeitraum'), typeSel), dayBox, monthBox, rangeBox,
+        h('div', {}, h('label', {}, 'Euro pro Kilometer'), rateIn)),
+      h('div', { class: 'actions', style: 'margin-top:12px' }, h('button', { type: 'button', class: 'primary', onclick: show }, 'Anzeigen')),
+      err),
+    result,
+  );
+  if (users.length) show();
+}
+
+Object.assign(pages, { mitarbeiter, kunden, berichte, statistik, einstellungen, belege, lohn });
 
 (async function init() {
   token = storage('get', 'spur-token');
