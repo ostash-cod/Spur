@@ -143,4 +143,26 @@ class PlaceDetectorTest {
         val more = run(d, listOf(fix(300, 200), fix(400, 20), fix(500, 10), fix(600, 390)))
         assertTrue(more.none { it is PlaceEvent.Leave })
     }
+
+    @Test
+    fun nachbarortWirdTrotzGrossemAbstandsrandErkannt() {
+        // Großer Ort (IKEA) und ein Baumarkt 220 m weiter nördlich: Der Baumarkt liegt noch im Abstandsrand von IKEA.
+        val ikea = Place(10, baseLat, baseLng, 150.0, 60_000, leaveMarginM = 100.0, leaveDebounceMs = 180_000)
+        val baumarkt = Place(11, north(220.0), baseLng, 150.0, 60_000)
+        val d = PlaceDetector(listOf(ikea, baumarkt))
+        val events = run(d, listOf(fix(0, 10), fix(40, 20), fix(70, 15), fix(100, 15), fix(130, 200), fix(160, 215), fix(190, 220), fix(220, 222), fix(250, 220)))
+        assertTrue("Ankunft bei IKEA", events.first() is PlaceEvent.Arrive && (events.first() as PlaceEvent.Arrive).siteId == 10L)
+        assertTrue("Abfahrt von IKEA", events.any { it is PlaceEvent.Leave && it.siteId == 10L })
+        assertTrue("Ankunft am Baumarkt", events.any { it is PlaceEvent.Arrive && it.siteId == 11L })
+        assertEquals(11L, d.currentSiteId)
+    }
+
+    @Test
+    fun amGrossenOrtBleibtMan_wennKeinNachbarortDa_ist() {
+        val ikea = Place(10, baseLat, baseLng, 150.0, 60_000, leaveMarginM = 100.0, leaveDebounceMs = 180_000)
+        val d = PlaceDetector(listOf(ikea))
+        val events = run(d, listOf(fix(0, 10), fix(40, 20), fix(70, 15), fix(100, 200), fix(160, 240), fix(220, 240), fix(280, 240)))
+        assertEquals(1, events.size) // nur die Ankunft, kein Wechsel
+        assertEquals(10L, d.currentSiteId)
+    }
 }

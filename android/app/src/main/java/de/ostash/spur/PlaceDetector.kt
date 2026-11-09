@@ -24,6 +24,9 @@ sealed class PlaceEvent {
     data class Leave(val siteId: Long, val at: Long) : PlaceEvent()
 }
 
+/** Wartezeit, bis ein Wechsel an einen Nachbarort gilt. */
+const val NEIGHBOUR_DEBOUNCE_MS = 60_000L
+
 fun distanceMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
     val r = 6_371_000.0
     val dLat = Math.toRadians(lat2 - lat1)
@@ -65,14 +68,20 @@ class PlaceDetector(
         if (cur != null) {
             // Ein Ort kann mehrere Punkte haben (zum Beispiel Parkplatz auf der anderen Seite): solange man bei einem davon ist, ist man noch da.
             val same = places.filter { it.siteId == cur.siteId } + cur
-            val stillThere = same.any { distanceMeters(f.lat, f.lng, it.lat, it.lng) <= it.radiusM + (it.leaveMarginM ?: leaveMarginM) }
+            val inMargin = same.any { distanceMeters(f.lat, f.lng, it.lat, it.lng) <= it.radiusM + (it.leaveMarginM ?: leaveMarginM) }
+            // Nachbarort: Liegt der Punkt im Kreis eines anderen Ortes und nicht mehr im eigenen Kreis (nur im Abstandsrand),
+            // dann ist man dort angekommen, auch wenn der eigene Ort groß ist (zum Beispiel IKEA neben einem Baumarkt).
+            val inOwnCircle = same.any { distanceMeters(f.lat, f.lng, it.lat, it.lng) <= it.radiusM }
+            val inNeighbour = !inOwnCircle && places.any { it.siteId != cur.siteId && distanceMeters(f.lat, f.lng, it.lat, it.lng) <= it.radiusM }
+            val stillThere = inMargin && !inNeighbour
             if (stillThere) {
                 outsideSince = null
                 lastInsideTs = f.ts
                 return events
             }
             val since = outsideSince ?: f.ts.also { outsideSince = it }
-            if (f.ts - since < (cur.leaveDebounceMs ?: leaveDebounceMs)) return events
+            val wait = if (inNeighbour) minOf(cur.leaveDebounceMs ?: leaveDebounceMs, NEIGHBOUR_DEBOUNCE_MS) else (cur.leaveDebounceMs ?: leaveDebounceMs)
+            if (f.ts - since < wait) return events
             events += PlaceEvent.Leave(cur.siteId, lastInsideTs)
             current = null
             outsideSince = null
