@@ -344,13 +344,13 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   });
 
   // Eine Fahrt am Desktop ändern: Streifen (Materialfahrt) wegnehmen oder einer anderen Baustelle zuordnen.
-  // mode: 'normal' = normale Fahrt, 'material' = Materialfahrt für site_id, 'auto' = zurück auf die automatische Erkennung.
+  // mode: 'normal' = normale Fahrt, 'material' = Materialfahrt für site_id, 'private' = Privatfahrt (grau, nicht für Kunden), 'auto' = zurück auf die automatische Erkennung.
   app.put('/api/days/:id/trip-mark', { preHandler: requireAdmin }, async (req, reply) => {
     const day = db.prepare('SELECT id FROM days WHERE id = ?').get(Number(req.params.id));
     if (!day) return reply.code(404).send({ error: 'Tag nicht gefunden' });
     const b = req.body ?? {};
     if (!validTs(b.started_at)) return reply.code(400).send({ error: 'Startzeit der Fahrt ungültig' });
-    if (!['normal', 'material', 'auto'].includes(b.mode)) return reply.code(400).send({ error: 'Art ungültig' });
+    if (!['normal', 'material', 'private', 'auto'].includes(b.mode)) return reply.code(400).send({ error: 'Art ungültig' });
     if (b.mode === 'auto') {
       db.prepare('DELETE FROM trip_marks WHERE day_id = ? AND started_at = ?').run(day.id, b.started_at);
       return { ok: true };

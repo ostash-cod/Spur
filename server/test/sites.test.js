@@ -318,6 +318,7 @@ test('Fahrt-Markierung: Materialfahrt einer Baustelle zuordnen, Streifen wegnehm
   assert.equal((await call('PUT', `/api/days/${dayId}/trip-mark`, wt, { started_at: 1_770_000_600_000, mode: 'normal' })).statusCode, 403);
   assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'material' })).statusCode, 400, 'Baustelle fehlt');
   assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'material', site_id: site.id })).statusCode, 200);
+  assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'private' })).statusCode, 200, 'Privatfahrt');
   assert.equal((await mark({ started_at: 1_770_000_600_000, mode: 'normal' })).statusCode, 200, 'überschreibt');
   let days = (await call('GET', `/api/days?user_id=${db.prepare('SELECT user_id FROM days WHERE id = ?').get(dayId).user_id}&from=1700000000000&to=1800000000000`, at)).json();
   assert.deepEqual(days[0].trip_marks, [{ started_at: 1_770_000_600_000, mode: 'normal', site_id: null }]);

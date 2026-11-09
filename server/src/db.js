@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS trip_marks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day_id INTEGER NOT NULL REFERENCES days(id),
   started_at INTEGER NOT NULL,
-  mode TEXT NOT NULL CHECK (mode IN ('normal','material')),
+  mode TEXT NOT NULL CHECK (mode IN ('normal','material','private')),
   site_id INTEGER REFERENCES sites(id),
   UNIQUE (day_id, started_at)
 );
@@ -171,6 +171,20 @@ export function openDb(path = ':memory:') {
   if (!hasColumn('sites', 'system')) db.exec('ALTER TABLE sites ADD COLUMN system TEXT');
   if (!hasColumn('users', 'can_receipts')) db.exec('ALTER TABLE users ADD COLUMN can_receipts INTEGER NOT NULL DEFAULT 0');
   if (!hasColumn('notes', 'kind')) db.exec("ALTER TABLE notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'arbeit'");
+  const tm = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'trip_marks'").get();
+  if (tm && !tm.sql.includes("'private'")) {
+    db.exec(`ALTER TABLE trip_marks RENAME TO trip_marks_old;
+      CREATE TABLE trip_marks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        day_id INTEGER NOT NULL REFERENCES days(id),
+        started_at INTEGER NOT NULL,
+        mode TEXT NOT NULL CHECK (mode IN ('normal','material','private')),
+        site_id INTEGER REFERENCES sites(id),
+        UNIQUE (day_id, started_at)
+      );
+      INSERT INTO trip_marks (id, day_id, started_at, mode, site_id) SELECT id, day_id, started_at, mode, site_id FROM trip_marks_old;
+      DROP TABLE trip_marks_old;`);
+  }
   if (!hasColumn('sites', 'kind')) db.exec("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'");
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {

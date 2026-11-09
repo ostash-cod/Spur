@@ -1068,6 +1068,7 @@ function assignTrips(blocks, marks, siteById) {
     const auto = real(prev) && real(next) && prev.site.id === next.site.id ? prev.site : null;
     const key = blocks[i].start;
     const mark = marks.find((m) => m.started_at === key) ?? null;
+    const isPrivate = mark?.mode === 'private';
     const material = mark ? (mark.mode === 'material' ? siteById.get(mark.site_id) ?? null : null) : auto;
     // Anfahrt: Fahrt, die bei einer Baustelle endet. Heimfahrt: Fahrt, die bei einer Baustelle beginnt und nicht an einer anderen endet.
     const anfahrtSite = !material && !mark && real(next) ? next.site : null;
@@ -1080,6 +1081,7 @@ function assignTrips(blocks, marks, siteById) {
       else if (b.type === 'travel' && anfahrtSite) { target = anfahrtSite; note = `Anfahrt zu ${anfahrtSite.name}`; }
       else if (b.type === 'travel' && heimSite) { target = heimSite; note = `Heimfahrt von ${heimSite.name}`; }
       b.trip = { key, target: material, auto, mark };
+      b.isPrivate = isPrivate;
       b.stripeTarget = target;
       b.stripeNote = note;
     }
@@ -1106,16 +1108,17 @@ function timelineView(day, siteById, onTrip) {
     const dur = fmtDuration(b.end - b.start);
     const times = `${fmtTime(b.start)} bis ${fmtTime(b.end)}`;
     const stripe = b.stripeTarget ?? null;
+    const priv = b.isPrivate ? 'background:#B8BCC2;color:#1B1C1E;' : '';
     const stripeStyle = stripe ? `background:repeating-linear-gradient(135deg,#F5C400 0 12px,${stripe.color} 12px 24px);color:#1B1C1E;` : '';
-    const tripNote = stripe ? ` · ${b.stripeNote}` : '';
+    const tripNote = b.isPrivate ? ' · Privatfahrt' : stripe ? ` · ${b.stripeNote}` : '';
     const clickable = onTrip && b.trip ? { class: 'clickable', title: 'Klicken: Fahrt ändern', onclick: () => onTrip(b.trip) } : {};
     if (b.type === 'travel') {
       box.append(
-        h('div', { ...clickable, class: `block travel${stripe ? ' striped' : ''}${clickable.class ? ' clickable' : ''}`, style: `top:${top}px;height:${height}px;${stripeStyle}` }, vanIcon(), h('div', {}, h('strong', { class: stripe ? 'on-stripe' : '' }, `${b.label} · ${dur}${tripNote}`), height >= 44 ? h('div', { class: `small${stripe ? ' on-stripe' : ''}` }, times) : null)),
+        h('div', { ...clickable, class: `block travel${stripe ? ' striped' : ''}${clickable.class ? ' clickable' : ''}`, style: `top:${top}px;height:${height}px;${priv || stripeStyle}` }, vanIcon(), h('div', {}, h('strong', { class: stripe ? 'on-stripe' : '' }, `${b.label} · ${dur}${tripNote}`), height >= 44 ? h('div', { class: `small${stripe ? ' on-stripe' : ''}` }, times) : null)),
       );
     } else if (isHaendlerBlock(b)) {
       box.append(
-        h('div', { ...clickable, class: `block site${stripe ? ' striped' : ''}${clickable.class ? ' clickable' : ''}`, style: `top:${top}px;height:${height}px;${stripe ? stripeStyle : `background:${b.site.color};color:#FFFFFF;`}` }, h('div', {}, h('strong', { class: stripe ? 'on-stripe' : '' }, `${b.site.name} · ${dur}${tripNote}`), height >= 44 ? h('div', { class: `small${stripe ? ' on-stripe' : ''}` }, `${times} · Händler`) : null)),
+        h('div', { ...clickable, class: `block site${stripe ? ' striped' : ''}${clickable.class ? ' clickable' : ''}`, style: `top:${top}px;height:${height}px;${priv || (stripe ? stripeStyle : `background:${b.site.color};color:#FFFFFF;`)}` }, h('div', {}, h('strong', { class: stripe ? 'on-stripe' : '' }, `${b.site.name} · ${dur}${tripNote}`), height >= 44 ? h('div', { class: `small${stripe ? ' on-stripe' : ''}` }, `${times} · Händler`) : null)),
       );
     } else {
       const color = b.site?.color ?? '#B8BCC2';
@@ -1157,7 +1160,7 @@ function segmentList(day, siteById) {
   return h('table', { style: 'margin:6px 0 10px' }, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Baustelle'), h('th', {}, 'Zeit'), h('th', {}, 'Dauer'), h('th', {}, 'Wie'))), h('tbody', {}, rows));
 }
 
-// Fahrt ändern: Streifen wegnehmen, oder als Materialfahrt einer anderen Baustelle zuordnen.
+// Fahrt ändern: Streifen wegnehmen, als Materialfahrt einer Baustelle zuordnen (dem Bauherrn berechnen) oder als Privatfahrt markieren.
 function tripDialog(day, trip, sites) {
   const targets = sites.filter((s) => s.kind !== 'haendler' && !s.system && !s.archived);
   const sel = h(
@@ -1176,7 +1179,9 @@ function tripDialog(day, trip, sites) {
     }
   };
   const state = trip.mark
-    ? trip.mark.mode === 'normal'
+    ? trip.mark.mode === 'private'
+      ? 'Von dir als Privatfahrt eingestellt (nicht für den Kunden).'
+      : trip.mark.mode === 'normal'
       ? 'Von dir als normale Fahrt eingestellt.'
       : `Von dir als Materialfahrt für ${trip.target?.name ?? '?'} eingestellt.`
     : trip.auto
@@ -1192,6 +1197,7 @@ function tripDialog(day, trip, sites) {
       'div',
       { class: 'actions', style: 'margin-top:14px;flex-wrap:wrap' },
       h('button', { class: 'primary', disabled: !targets.length, onclick: () => save({ mode: 'material', site_id: Number(sel.value) }) }, 'Als Materialfahrt speichern'),
+      h('button', { onclick: () => save({ mode: 'private' }) }, 'Privatfahrt (grau, nicht für den Kunden)'),
       h('button', { onclick: () => save({ mode: 'normal' }) }, 'Normale Fahrt (ohne Streifen)'),
       trip.mark ? h('button', { onclick: () => save({ mode: 'auto' }) }, 'Zurück auf automatisch') : null,
       h('button', { onclick: () => d.close() }, 'Abbrechen'),
