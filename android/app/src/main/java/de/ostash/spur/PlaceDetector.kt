@@ -50,7 +50,10 @@ class PlaceDetector(
     private val leaveDebounceMs: Long = 90_000,
     private val maxAccuracyM: Float = 100f,
     private val candidateGraceMs: Long = 90_000,
+    /** Wer im Kreis nur durchfährt (Stau, Ampel), steht nicht dort: In den letzten Sekunden der Wartezeit darf er sich höchstens so weit bewegt haben. */
+    private val stationaryM: Double = 100.0,
 ) {
+    private val recent = ArrayDeque<Fix>()
     private var current: Place? = null
     private var candidate: Place? = null
     private var candidateSince = 0L
@@ -101,9 +104,14 @@ class PlaceDetector(
         if (candidate?.siteId != inside.siteId) {
             candidate = inside
             candidateSince = f.ts
+            recent.clear()
         }
         candidateLastIn = f.ts
-        if (f.ts - candidateSince >= inside.dwellMs) {
+        recent.addLast(f)
+        val windowMs = minOf(inside.dwellMs, 120_000L)
+        while (recent.size > 1 && f.ts - recent.first().ts > windowMs) recent.removeFirst()
+        val moved = distanceMeters(recent.first().lat, recent.first().lng, f.lat, f.lng)
+        if (f.ts - candidateSince >= inside.dwellMs && moved <= stationaryM) {
             events += PlaceEvent.Arrive(inside.siteId, candidateSince)
             current = inside
             candidate = null

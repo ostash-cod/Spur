@@ -165,4 +165,24 @@ class PlaceDetectorTest {
         assertEquals(1, events.size) // nur die Ankunft, kein Wechsel
         assertEquals(10L, d.currentSiteId)
     }
+
+    @Test
+    fun langsamesDurchkriechenImStauIstKeineAnkunft() {
+        val big = Place(1, baseLat, baseLng, 200.0, 120_000)
+        val d = PlaceDetector(listOf(big))
+        // 6 Minuten lang im Kreis, aber immer weiter nach Süden: alle 30 s etwa 50 m
+        val fixes = (0..12).map { fix(it * 30, 190 - it * 30) }
+        assertTrue(run(d, fixes).isEmpty())
+    }
+
+    @Test
+    fun einparkenUndStehenBleibenIstEineAnkunft() {
+        val big = Place(1, baseLat, baseLng, 200.0, 120_000)
+        val d = PlaceDetector(listOf(big))
+        // fährt hinein (150 m in 30 s), steht dann still
+        val fixes = listOf(fix(0, 190), fix(15, 120), fix(30, 40)) + (2..12).map { fix(it * 30, 35) }
+        val events = run(d, fixes)
+        assertEquals(1, events.size)
+        assertEquals(PlaceEvent.Arrive(1, 0), events[0])
+    }
 }
