@@ -54,6 +54,10 @@ object EveningCheck {
     const val ACTION_FIRE = "de.ostash.spur.EVENING_FIRE"
     const val ACTION_YES = "de.ostash.spur.EVENING_YES"
     const val ACTION_END = "de.ostash.spur.EVENING_END"
+    const val ACTION_ARRIVED_YES = "de.ostash.spur.ARRIVED_YES"
+    const val ACTION_ARRIVED_NO = "de.ostash.spur.ARRIVED_NO"
+    const val EXTRA_AT = "at"
+    private const val ARRIVAL_NOTIFICATION_ID = 5
     private const val NOTIFICATION_ID = 4
     private const val ALARM_CODE = 200
     private const val CHANNEL = "evening_check"
@@ -157,6 +161,52 @@ object EveningCheck {
         dayEnded(ctx)
     }
 
+    /** Angekommen (zu Hause oder in der Firma): Tag beenden? Das Ende ist die Ankunftszeit. */
+    fun askArrival(ctx: Context, at: Long) {
+        if (Db.get(ctx).openDay() == null) return
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(CHANNEL) == null) {
+            val ch = NotificationChannel(CHANNEL, "Abendfrage", NotificationManager.IMPORTANCE_HIGH)
+            ch.enableVibration(true)
+            nm.createNotificationChannel(ch)
+        }
+        val open = PendingIntent.getActivity(
+            ctx, 5, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        fun act(code: Int, a: String) = PendingIntent.getBroadcast(
+            ctx, code, Intent(ctx, EveningReceiver::class.java).setAction(a).putExtra(EXTRA_AT, at),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.GERMANY).format(java.util.Date(at))
+        val n = NotificationCompat.Builder(ctx, CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_menu_recent_history)
+            .setContentTitle("Spur: Arbeitstag beenden?")
+            .setContentText("Du bist seit $time Uhr angekommen. Mit „Ja“ endet der Tag um $time Uhr.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .addAction(0, "Ja, beenden", act(31, ACTION_ARRIVED_YES))
+            .addAction(0, "Nein, weiter", act(32, ACTION_ARRIVED_NO))
+            .build()
+        runCatching { nm.notify(ARRIVAL_NOTIFICATION_ID, n) }
+    }
+
+    fun arrivedYes(ctx: Context, at: Long) {
+        ctx.getSystemService(NotificationManager::class.java).cancel(ARRIVAL_NOTIFICATION_ID)
+        val day = Db.get(ctx).openDay() ?: return
+        val end = maxOf(at, day.startedAt)
+        Db.get(ctx).endOpenDayAt(end)
+        Prefs.setAutoEnded(ctx, day.id, end, "arrival")
+        runCatching { TrackingService.stop(ctx) }
+        SyncWorker.enqueue(ctx)
+        dayEnded(ctx)
+    }
+
+    fun arrivedNo(ctx: Context) {
+        ctx.getSystemService(NotificationManager::class.java).cancel(ARRIVAL_NOTIFICATION_ID)
+    }
+
     private fun show(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL) == null) {
@@ -189,6 +239,8 @@ class EveningReceiver : BroadcastReceiver() {
             EveningCheck.ACTION_FIRE -> EveningCheck.fire(ctx)
             EveningCheck.ACTION_YES -> EveningCheck.yes(ctx)
             EveningCheck.ACTION_END -> EveningCheck.endNow(ctx)
+            EveningCheck.ACTION_ARRIVED_YES -> EveningCheck.arrivedYes(ctx, intent.getLongExtra(EveningCheck.EXTRA_AT, System.currentTimeMillis()))
+            EveningCheck.ACTION_ARRIVED_NO -> EveningCheck.arrivedNo(ctx)
         }
     }
 }

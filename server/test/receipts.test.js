@@ -46,3 +46,20 @@ test('Belege: Freischaltung, Hochladen, Aufteilen, Eingangskorb', async () => {
   assert.equal((await call('PUT', `/api/receipts/${forSite[0].id}/allocs`, at, { allocs: [] })).statusCode, 200);
   assert.equal((await call('GET', '/api/receipts?unassigned=1', at)).json().length, 1, 'zurück im Eingangskorb');
 });
+
+test('Weg Zuhause-Firma (km): Chef setzt, Mitarbeiter sieht ihn in /api/me', async () => {
+  const db = openDb(':memory:');
+  const a = createUser(db, { name: 'Chef', role: 'admin' });
+  const w = createUser(db, { name: 'Mitarbeiter' });
+  const app = await buildApp({ db });
+  const tok = async (c) => (await app.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const [at, wt] = [await tok(a.code), await tok(w.code)];
+  const call = (m, u, t, p) => app.inject({ method: m, url: u, headers: { authorization: `Bearer ${t}` }, payload: p });
+  const uid = w.user?.id ?? db.prepare("SELECT id FROM users WHERE name = 'Mitarbeiter'").get().id;
+  assert.equal((await call('GET', '/api/me', wt)).json().home_km, null);
+  assert.equal((await call('PATCH', `/api/users/${uid}`, at, { home_km: 23.5 })).statusCode, 200);
+  assert.equal((await call('GET', '/api/me', wt)).json().home_km, 23.5);
+  assert.equal((await call('PATCH', `/api/users/${uid}`, at, { home_km: -3 })).statusCode, 400);
+  assert.equal((await call('PATCH', `/api/users/${uid}`, at, { home_km: null })).statusCode, 200);
+  assert.equal((await call('GET', '/api/me', wt)).json().home_km, null);
+});

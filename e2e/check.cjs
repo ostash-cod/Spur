@@ -44,11 +44,11 @@ let srv;
   await page.screenshot({ path: '/tmp/spur-e2e/3-mitarbeiter.png' });
 
   // Privatauto-Schalter
-  const box = page.locator('tbody tr', { hasText: 'Mykhaylo' }).locator('input[type=checkbox]');
+  const box = page.locator('tbody tr', { hasText: 'Mykhaylo' }).locator('input[type=checkbox]').first();
   console.log('Privatauto an:', await box.isChecked());
   await box.uncheck(); await page.waitForTimeout(300);
   await page.reload(); await page.waitForSelector('table');
-  console.log('nach Reload aus:', !(await page.locator('tbody tr', { hasText: 'Mykhaylo' }).locator('input[type=checkbox]').isChecked()));
+  console.log('nach Reload aus:', !(await page.locator('tbody tr', { hasText: 'Mykhaylo' }).locator('input[type=checkbox]').first().isChecked()));
 
   // Einstellungen
   await page.click('a[data-page=einstellungen]');

@@ -421,6 +421,27 @@ async function mitarbeiter(main, userId, dateStr) {
       h(
         'td',
         {},
+        h('input', {
+          type: 'number',
+          min: '0',
+          max: '500',
+          step: '0.1',
+          style: 'width:90px',
+          'aria-label': `Weg Zuhause–Firma für ${u.name}`,
+          value: u.home_km ?? '',
+          placeholder: 'km',
+          onchange: async (e) => {
+            try {
+              await api(`/users/${u.id}`, { method: 'PATCH', body: { home_km: e.target.value === '' ? null : Number(e.target.value) } });
+            } catch (err) {
+              alert(err.message);
+            }
+          },
+        }),
+      ),
+      h(
+        'td',
+        {},
         u.role === 'admin'
           ? h('span', { class: 'hint' }, 'immer')
           : h('input', {
@@ -496,7 +517,7 @@ async function mitarbeiter(main, userId, dateStr) {
       h(
         'table',
         {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Privatauto'), h('th', {}, 'Belege'), h('th', {}, 'Status'), h('th', {}, ''))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Privatauto'), h('th', {}, 'Weg Zuhause–Firma (km)'), h('th', {}, 'Belege'), h('th', {}, 'Status'), h('th', {}, ''))),
         h('tbody', {}, rows),
       ),
       h('p', { class: 'hint' }, 'Privatauto: Nur dann erscheinen in der App die Knöpfe für Privatauto und Transporter. Serhii hat zum Beispiel kein Auto.'),

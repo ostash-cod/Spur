@@ -170,6 +170,7 @@ export function openDb(path = ':memory:') {
   if (!hasColumn('customers', 'address')) db.exec('ALTER TABLE customers ADD COLUMN address TEXT');
   if (!hasColumn('sites', 'system')) db.exec('ALTER TABLE sites ADD COLUMN system TEXT');
   if (!hasColumn('users', 'can_receipts')) db.exec('ALTER TABLE users ADD COLUMN can_receipts INTEGER NOT NULL DEFAULT 0');
+  if (!hasColumn('users', 'home_km')) db.exec('ALTER TABLE users ADD COLUMN home_km REAL');
   if (!hasColumn('notes', 'kind')) db.exec("ALTER TABLE notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'arbeit'");
   const tm = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'trip_marks'").get();
   if (tm && !tm.sql.includes("'private'")) {

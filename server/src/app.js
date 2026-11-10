@@ -176,19 +176,24 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       uses_private_car: b.uses_private_car === undefined ? row.uses_private_car : b.uses_private_car ? 1 : 0,
       active: b.active === undefined ? row.active : b.active ? 1 : 0,
       can_receipts: b.can_receipts === undefined ? row.can_receipts : b.can_receipts ? 1 : 0,
+      home_km: b.home_km === undefined ? row.home_km : b.home_km === null || b.home_km === '' ? null : Number(b.home_km),
     };
+    if (next.home_km !== null && next.home_km !== undefined && !(next.home_km >= 0 && next.home_km <= 500)) {
+      return reply.code(400).send({ error: 'Kilometer müssen zwischen 0 und 500 liegen' });
+    }
     if (!LANGUAGES.includes(next.language)) {
       return reply.code(400).send({ error: 'Sprache muss de, ru oder uk sein' });
     }
     if (id === req.user.id && !next.active) {
       return reply.code(400).send({ error: 'Du kannst dich nicht selbst deaktivieren' });
     }
-    db.prepare('UPDATE users SET name = ?, language = ?, uses_private_car = ?, active = ?, can_receipts = ? WHERE id = ?').run(
+    db.prepare('UPDATE users SET name = ?, language = ?, uses_private_car = ?, active = ?, can_receipts = ?, home_km = ? WHERE id = ?').run(
       next.name,
       next.language,
       next.uses_private_car,
       next.active,
       next.can_receipts,
+      next.home_km ?? null,
       id,
     );
     if (!next.active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);

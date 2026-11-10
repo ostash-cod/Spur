@@ -85,6 +85,7 @@ export function publicUser(row) {
     role: row.role,
     uses_private_car: !!row.uses_private_car,
     can_receipts: row.role === 'admin' || !!row.can_receipts,
+    home_km: row.home_km > 0 ? row.home_km : null,
     active: !!row.active,
   };
 }

@@ -61,6 +61,30 @@ class TrackingService : Service() {
 
     private var askedStopId = -1L
 
+    // Ankunft zu Hause oder abends in der Firma: Tag beenden?
+    private var homeWatcher: HomeWatcher? = null
+    private var lastArrivalAskAt = 0L
+
+    private fun askArrival(at: Long) {
+        val now = System.currentTimeMillis()
+        if (now - lastArrivalAskAt < 30 * 60_000L) return
+        lastArrivalAskAt = now
+        EveningCheck.askArrival(this, at)
+    }
+
+    /** Abends in die Firma oder ins Lager gekommen, nachdem man auf einer Baustelle war. */
+    private fun checkFirmaArrival(events: List<PlaceEvent>) {
+        val arrive = events.filterIsInstance<PlaceEvent.Arrive>().firstOrNull() ?: return
+        val db = Db.get(this)
+        val site = db.sites().firstOrNull { it.id == arrive.siteId } ?: return
+        if (site.system == null) return
+        val hour = java.time.Instant.ofEpochMilli(arrive.at).atZone(java.time.ZoneId.systemDefault()).hour
+        if (hour < ARRIVAL_ASK_FROM_HOUR) return
+        val sites = db.sites().associateBy { it.id }
+        val workedOnSite = db.segmentsOfDay(dayId).any { it.kind == "work" && sites[it.siteId]?.system == null }
+        if (workedOnSite) askArrival(arrive.at)
+    }
+
     private fun askLongStop() {
         if (dayId < 0) return
         val st = Db.get(this).latestStop(dayId) ?: return
@@ -195,8 +219,11 @@ class TrackingService : Service() {
                 sinceSync++
                 val fix = Fix(loc.time, loc.latitude, loc.longitude, loc.accuracy)
                 lastFix = fix
+                homeWatcher?.onFix(fix)?.let { askArrival(it) }
                 detector?.let { d ->
-                    handle(d.onFix(fix))
+                    val events = d.onFix(fix)
+                    handle(events)
+                    checkFirmaArrival(events)
                     checkAway(fix, d)
                     stopDetector?.onFix(fix, d.currentSiteId != null)?.let { handleStop(it) }
                 }
@@ -249,6 +276,7 @@ class TrackingService : Service() {
         startInForeground()
         if (!granted) return
         detector = PlaceDetector(loadPlaces())
+        homeWatcher = Prefs.home(this)?.let { HomeWatcher(it.first, it.second) }
         stopDetector = StopDetector()
         lastFix = null
         handler.removeCallbacks(tick)
@@ -266,6 +294,7 @@ class TrackingService : Service() {
     private fun stopTracking() {
         handler.removeCallbacks(tick)
         detector = null
+        homeWatcher = null
         stopDetector = null
         if (running) {
             LocationServices.getFusedLocationProviderClient(this).removeLocationUpdates(callback)
@@ -325,6 +354,7 @@ class TrackingService : Service() {
         private const val MIN_DISTANCE_M = 15f
         private const val SYNC_EVERY_POINTS = 40
         private const val TICK_MS = 20_000L
+        private const val ARRIVAL_ASK_FROM_HOUR = 16
         private const val STALE_FIX_MS = 15 * 60_000L
         private const val DWELL_SITE_MS = 120_000L
         private const val DWELL_SYSTEM_MS = 60_000L

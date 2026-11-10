@@ -28,6 +28,7 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                 val me = Api.get(ctx, "/api/me", token)
                 Prefs.setAdmin(ctx, me.optString("role") == "admin")
                 Prefs.setCanReceipts(ctx, me.optBoolean("can_receipts", false))
+                Prefs.setHomeKm(ctx, if (me.isNull("home_km")) 0.0 else me.optDouble("home_km", 0.0))
             }
             // Aktuelle Baustellen vom Server holen (für die Kacheln).
             val sites = Api.getArray(ctx, "/api/sites", token)

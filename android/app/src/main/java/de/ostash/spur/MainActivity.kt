@@ -589,7 +589,7 @@ fun MainScreen() {
         AlertDialog(
             onDismissRequest = { Prefs.clearAutoEnded(ctx); autoEndedDay = 0L },
             title = { Text("Dein Tag wurde beendet") },
-            text = { Text("Die App hat den Tag $clock Uhr beendet, weil keine Antwort kam. Bitte prüfe die Zeiten auf dem Zettel.") },
+            text = { Text(if (Prefs.autoEndedReason(ctx) == "arrival") "Dein Tag wurde bei deiner Ankunft $clock Uhr beendet. Bitte prüfe die Zeiten auf dem Zettel." else "Die App hat den Tag $clock Uhr beendet, weil keine Antwort kam. Bitte prüfe die Zeiten auf dem Zettel.") },
             confirmButton = {
                 TextButton(onClick = {
                     val id = autoEndedDay
@@ -1315,6 +1315,39 @@ fun SettingsScreen() {
         Text("Angemeldet als $name")
         Text("Version ${runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrDefault("?")}", fontWeight = FontWeight.Bold)
         Text("Server: $server", color = Color(0xFF6A6F75), fontSize = 13.sp)
+
+        Text("Mein Zuhause", fontWeight = FontWeight.Bold)
+        var homeSet by remember { mutableStateOf(Prefs.home(ctx) != null) }
+        Text(
+            if (homeSet) "Zuhause ist gespeichert. Die App fragt „Arbeitstag beenden?“, wenn du nach der Arbeit ankommst."
+            else "Noch nicht gespeichert. Stell dich nach Hause und tippe auf den Knopf.",
+        )
+        Text("Das bleibt nur auf diesem Handy. Es wird nicht an den Server geschickt.", color = Color(0xFF6A6F75), fontSize = 13.sp)
+        OutlinedButton(
+            onClick = {
+                if (!hasFineLocation(ctx)) {
+                    android.widget.Toast.makeText(ctx, "Bitte zuerst den Standort erlauben.", android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    runCatching {
+                        com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(ctx)
+                            .getCurrentLocation(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, null)
+                            .addOnSuccessListener { loc ->
+                                if (loc != null && loc.accuracy <= 100f) {
+                                    Prefs.setHome(ctx, loc.latitude, loc.longitude)
+                                    homeSet = true
+                                    android.widget.Toast.makeText(ctx, "Zuhause gespeichert.", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    android.widget.Toast.makeText(ctx, "Standort zu ungenau. Bitte draußen noch einmal versuchen.", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text("Hier ist mein Zuhause") }
+        if (homeSet) {
+            TextButton(onClick = { Prefs.clearHome(ctx); homeSet = false }) { Text("Zuhause löschen") }
+        }
 
         Text("Standort", fontWeight = FontWeight.Bold)
         Text(

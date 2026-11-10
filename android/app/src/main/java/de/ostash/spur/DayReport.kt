@@ -115,11 +115,27 @@ fun SnapshotStateList<SheetLine>.setBoundary(ctx: android.content.Context, i: In
     }
 }
 
-fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>): List<SheetLine> {
+/**
+ * Fester Weg Zuhause–Firma: Beginnt der Tag mit einer Fahrt, die bei Firma oder Lager endet, oder endet er mit einer Fahrt von dort,
+ * zählt die feste Kilometerzahl statt der Strecke aus den Standortpunkten.
+ */
+/** Fester Weg Zuhause–Firma für Mitarbeiter mit Privatauto, sonst 0. */
+fun commuteKm(ctx: android.content.Context): Double = if (Prefs.usesPrivateCar(ctx)) Prefs.homeKm(ctx) else 0.0
+
+fun isCommuteBlock(blocks: List<TimelineBlock>, i: Int, siteMap: Map<Long, SiteRow>): Boolean {
+    val b = blocks[i]
+    if (!b.isTravel) return false
+    fun isBase(x: TimelineBlock?) = x != null && !x.isTravel && x.siteId != null && siteMap[x.siteId]?.system != null
+    val first = i == 0
+    val last = i == blocks.lastIndex
+    return (first && isBase(blocks.getOrNull(i + 1))) || (last && isBase(blocks.getOrNull(i - 1)))
+}
+
+fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixedKm: Double = 0.0): List<SheetLine> {
     val blocks = buildTimeline(day.startedAt, day.endedAt, now, db.segmentsOfDay(day.id), siteMap)
     val points = db.pointsSince(day.id, day.startedAt)
     val fallback = db.lastVehicle()
-    return blocks.map { b ->
+    return blocks.mapIndexed { idx, b ->
         val travel = b.isTravel
         val kind = if (travel) "travel" else b.kind
         val auto = if (travel) routeKm(points, b.start, b.end) else null
@@ -127,7 +143,8 @@ fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>): Lis
             if (travel) {
                 val mark = db.tripMark(day.id, b.start)
                 l.vehicle = mark?.vehicle ?: fallback
-                val km = mark?.km ?: auto
+                val commute = fixedKm > 0.0 && isCommuteBlock(blocks, idx, siteMap)
+                val km = mark?.km ?: if (commute) fixedKm else auto
                 l.km = if (km == null || km == 0.0) "" else String.format(java.util.Locale.GERMANY, "%.1f", km)
             }
         }
@@ -147,11 +164,11 @@ fun isDayLocked(db: Db, date: java.time.LocalDate): Boolean =
     date.isBefore(java.time.LocalDate.now().minusDays(7)) || db.isWeekClosed(weekStartOf(date))
 
 /** Zettel aus dem gespeicherten Stand (Fahrzeug, Kilometer, Pause) zusammenstellen und zum Senden vormerken. */
-fun queueSheetFor(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>) {
+fun queueSheetFor(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixedKm: Double = 0.0) {
     val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     if (db.sheetState(date) != null) return // schon abgegeben oder vorgemerkt, mit den Änderungen des Mitarbeiters
     val end = day.endedAt ?: now
-    val lines = sheetLines(db, day, now, siteMap)
+    val lines = sheetLines(db, day, now, siteMap, fixedKm)
     val brk = db.segmentsOfDay(day.id).filter { it.kind == "break" && it.endedAt != null }.sumOf { it.endedAt!! - it.startedAt }
     val pauseMin = db.dayPause(day.id) ?: maxOf(pauseRuleMinutes(end - day.startedAt), (brk / 60_000L).toInt())
     queueSheetJson(db, day, day.startedAt, end, pauseMin, lines)
@@ -182,7 +199,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
     val savedJson = remember(day.id) { db.unsentOrSentSheetJson(date) }
     val lines = remember(day.id) {
         mutableStateListOf<SheetLine>().also {
-            it.addAll(if (savedJson != null) savedSheetLines(savedJson, siteMap) else sheetLines(db, day, now, siteMap))
+            it.addAll(if (savedJson != null) savedSheetLines(savedJson, siteMap) else sheetLines(db, day, now, siteMap, commuteKm(ctx)))
         }
     }
     val tick = remember { mutableStateOf(0) }
@@ -252,7 +269,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
         dismissButton = {
             Row {
                 if (savedJson != null) TextButton(onClick = {
-                    lines.clear(); lines.addAll(sheetLines(db, day, now, siteMap)); tick.value++
+                    lines.clear(); lines.addAll(sheetLines(db, day, now, siteMap, commuteKm(ctx))); tick.value++
                 }) { Text("Neu aus dem Tag") }
                 TextButton(onClick = onDismiss) { Text("Später") }
             }
@@ -308,7 +325,7 @@ fun WeekSubmitButton(now: Long, siteMap: Map<Long, SiteRow>) {
                     while (!d.isAfter(today)) {
                         val from = d.atStartOfDay(zone).toInstant().toEpochMilli()
                         val to = d.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-                        for (day in db.daysOnDate(from, to)) { queueSheetFor(db, day, now, siteMap); n++ }
+                        for (day in db.daysOnDate(from, to)) { queueSheetFor(db, day, now, siteMap, commuteKm(ctx)); n++ }
                         d = d.plusDays(1)
                     }
                     db.closeWeek(weekStart)

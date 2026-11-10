@@ -86,6 +86,21 @@ object Prefs {
     /** Tag, der automatisch beendet wurde (für den Hinweis am nächsten Morgen). */
     fun autoEndedDay(c: Context): Long = sp(c).getLong("auto_day", 0L)
     fun autoEndedAt(c: Context): Long = sp(c).getLong("auto_at", 0L)
-    fun setAutoEnded(c: Context, dayId: Long, at: Long) { sp(c).edit().putLong("auto_day", dayId).putLong("auto_at", at).apply() }
-    fun clearAutoEnded(c: Context) { sp(c).edit().remove("auto_day").remove("auto_at").apply() }
+    fun autoEndedReason(c: Context): String = sp(c).getString("auto_reason", "noanswer") ?: "noanswer"
+    fun setAutoEnded(c: Context, dayId: Long, at: Long, reason: String = "noanswer") { sp(c).edit().putLong("auto_day", dayId).putLong("auto_at", at).putString("auto_reason", reason).apply() }
+    fun clearAutoEnded(c: Context) { sp(c).edit().remove("auto_day").remove("auto_at").remove("auto_reason").apply() }
+
+    // --- Zuhause (bleibt nur auf diesem Handy) und fester Weg Zuhause–Firma ---
+    fun home(c: Context): Pair<Double, Double>? {
+        val p = sp(c)
+        if (!p.contains("home_lat") || !p.contains("home_lng")) return null
+        return Pair(java.lang.Double.longBitsToDouble(p.getLong("home_lat", 0L)), java.lang.Double.longBitsToDouble(p.getLong("home_lng", 0L)))
+    }
+    fun setHome(c: Context, lat: Double, lng: Double) {
+        sp(c).edit().putLong("home_lat", java.lang.Double.doubleToRawLongBits(lat)).putLong("home_lng", java.lang.Double.doubleToRawLongBits(lng)).apply()
+    }
+    fun clearHome(c: Context) { sp(c).edit().remove("home_lat").remove("home_lng").apply() }
+    /** Fester Weg Zuhause–Firma in km, vom Chef am Desktop eingetragen. 0 = nicht gesetzt. */
+    fun homeKm(c: Context): Double = sp(c).getFloat("home_km", 0f).toDouble()
+    fun setHomeKm(c: Context, km: Double) { sp(c).edit().putFloat("home_km", km.toFloat()).apply() }
 }
