@@ -216,13 +216,16 @@ class TrackingService : Service() {
             ACTION_STOP -> {
                 stopTracking()
                 db.endOpenDay(System.currentTimeMillis())
+                EveningCheck.dayEnded(this)
                 SyncWorker.enqueue(this)
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_START -> {
+                val fresh = db.openDay() == null
                 dayId = db.startDayIfNone(System.currentTimeMillis()).id
                 Reminder.dayStarted(this) // keine Erinnerung mehr, der Tag läuft
+                if (fresh) EveningCheck.dayStarted(this) else EveningCheck.schedule(this)
                 SyncWorker.enqueue(this)
             }
             else -> {

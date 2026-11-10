@@ -75,4 +75,17 @@ object Prefs {
     fun setReminderFreeDate(c: Context, d: LocalDate?) { sp(c).edit().putString("rem_free", d?.toString()).apply() }
     fun reminderSnoozeUntil(c: Context): Long = sp(c).getLong("rem_snooze", 0L)
     fun setReminderSnoozeUntil(c: Context, ts: Long) { sp(c).edit().putLong("rem_snooze", ts).apply() }
+
+    // --- Abendfrage und automatisches Tagesende ---
+    fun eveningOn(c: Context): Boolean = sp(c).getBoolean("eve_on", true)
+    fun eveningAskMinute(c: Context): Int = sp(c).getInt("eve_ask", EveningPlan.DEFAULT_ASK_MINUTE).coerceIn(0, 24 * 60 - 1)
+    fun eveningPending(c: Context): Long = sp(c).getLong("eve_pending", 0L)
+    fun setEveningPending(c: Context, ts: Long) { sp(c).edit().putLong("eve_pending", ts).apply() }
+    fun eveningLastYes(c: Context): Long = sp(c).getLong("eve_yes", 0L)
+    fun setEveningLastYes(c: Context, ts: Long) { sp(c).edit().putLong("eve_yes", ts).apply() }
+    /** Tag, der automatisch beendet wurde (für den Hinweis am nächsten Morgen). */
+    fun autoEndedDay(c: Context): Long = sp(c).getLong("auto_day", 0L)
+    fun autoEndedAt(c: Context): Long = sp(c).getLong("auto_at", 0L)
+    fun setAutoEnded(c: Context, dayId: Long, at: Long) { sp(c).edit().putLong("auto_day", dayId).putLong("auto_at", at).apply() }
+    fun clearAutoEnded(c: Context) { sp(c).edit().remove("auto_day").remove("auto_at").apply() }
 }

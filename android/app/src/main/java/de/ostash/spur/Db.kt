@@ -238,6 +238,16 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         endAllOpenSegments(now)
     }
 
+    /** Beendet den laufenden Tag zu einem bestimmten Zeitpunkt (nie vor seinem Beginn). */
+    @Synchronized
+    fun endOpenDayAt(endAt: Long) {
+        val day = openDay() ?: return
+        val end = maxOf(endAt, day.startedAt)
+        val cv = ContentValues().apply { put("ended_at", end); put("dirty", 1) }
+        writableDatabase.update("days", cv, "ended_at IS NULL", null)
+        writableDatabase.execSQL("UPDATE segments SET ended_at = MAX(started_at, ?), dirty = 1 WHERE ended_at IS NULL", arrayOf<Any>(end))
+    }
+
     fun openDay(): DayRow? =
         readableDatabase.rawQuery(
             "SELECT $dayColumns FROM days WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1",

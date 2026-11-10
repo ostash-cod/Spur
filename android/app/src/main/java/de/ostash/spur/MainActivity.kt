@@ -248,6 +248,7 @@ fun MainScreen() {
     LaunchedEffect(Unit) {
         if (db.openDay() != null && hasFineLocation(ctx)) TrackingService.start(ctx)
         Reminder.schedule(ctx) // Erinnerung zum Tagesbeginn
+        EveningCheck.fire(ctx) // Abendfrage / automatisches Tagesende (auch nachholen, wenn das Handy aus war)
     }
     // Chef-Status beim Start vom Server holen (wer sich früher angemeldet hat, hat ihn vielleicht nicht gespeichert).
     LaunchedEffect(Unit) {
@@ -577,6 +578,27 @@ fun MainScreen() {
     sheetDayId?.let { id ->
         val d = remember(id, now / 5000) { db.dayById(id) }
         if (d != null) SheetDialog(d, now, siteMap, onDismiss = { sheetDayId = null })
+    }
+
+    var autoEndedDay by remember { mutableStateOf(Prefs.autoEndedDay(ctx)) }
+    LaunchedEffect(now / 5000) { if (Prefs.autoEndedDay(ctx) != autoEndedDay) autoEndedDay = Prefs.autoEndedDay(ctx) }
+    if (autoEndedDay > 0L && db.openDay() == null) {
+        val endAt = Prefs.autoEndedAt(ctx)
+        val clock = java.time.format.DateTimeFormatter.ofPattern("EEEE, d. MMMM 'um' HH:mm", java.util.Locale.GERMAN)
+            .format(Instant.ofEpochMilli(endAt).atZone(ZoneId.systemDefault()))
+        AlertDialog(
+            onDismissRequest = { Prefs.clearAutoEnded(ctx); autoEndedDay = 0L },
+            title = { Text("Dein Tag wurde beendet") },
+            text = { Text("Die App hat den Tag $clock Uhr beendet, weil keine Antwort kam. Bitte prüfe die Zeiten auf dem Zettel.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val id = autoEndedDay
+                    Prefs.clearAutoEnded(ctx); autoEndedDay = 0L
+                    sheetDayId = id
+                }) { Text("Zettel prüfen", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { Prefs.clearAutoEnded(ctx); autoEndedDay = 0L }) { Text("OK") } },
+        )
     }
 
     if (confirmStop) {

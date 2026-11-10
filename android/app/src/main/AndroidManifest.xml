@@ -42,6 +42,10 @@
         </provider>
 
         <receiver
+            android:name=".EveningReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".ReminderReceiver"
             android:exported="false">
             <intent-filter>

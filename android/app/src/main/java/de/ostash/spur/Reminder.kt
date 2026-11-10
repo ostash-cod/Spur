@@ -192,7 +192,10 @@ class ReminderReceiver : BroadcastReceiver() {
             }
             // Neustart des Handys, Update der App, Zeitumstellung: Wecker neu stellen.
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED,
-            AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> Reminder.schedule(ctx)
+            AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED -> {
+                Reminder.schedule(ctx)
+                EveningCheck.fire(ctx) // nach Neustart: war inzwischen Zeit zum Fragen oder Beenden?
+            }
         }
     }
 }
