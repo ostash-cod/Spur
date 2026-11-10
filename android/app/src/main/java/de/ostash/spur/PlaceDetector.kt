@@ -52,6 +52,8 @@ class PlaceDetector(
     private val candidateGraceMs: Long = 90_000,
     /** Wer im Kreis nur durchfährt (Stau, Ampel), steht nicht dort: In den letzten Sekunden der Wartezeit darf er sich höchstens so weit bewegt haben. */
     private val stationaryM: Double = 100.0,
+    /** Für eine Ankunft zählen nur genaue Punkte: Ein Punkt mit 90 m Fehler kann einen in einen Kreis schieben, in dem man nie war. */
+    private val arriveMaxAccuracyM: Float = 50f,
 ) {
     private val recent = ArrayDeque<Fix>()
     private var current: Place? = null
@@ -90,6 +92,8 @@ class PlaceDetector(
             outsideSince = null
             candidate = null
         }
+
+        if (f.accuracy > arriveMaxAccuracyM) return events
 
         val inside = places
             .map { it to distanceMeters(f.lat, f.lng, it.lat, it.lng) }

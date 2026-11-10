@@ -185,4 +185,11 @@ class PlaceDetectorTest {
         assertEquals(1, events.size)
         assertEquals(PlaceEvent.Arrive(1, 0), events[0])
     }
+
+    @Test
+    fun ungenauePunkteZaehlenNichtFuerEineAnkunft() {
+        val d = PlaceDetector(listOf(site))
+        val events = run(d, (0..10).map { fix(it * 30, 150, acc = 80f) })
+        assertTrue(events.isEmpty())
+    }
 }
