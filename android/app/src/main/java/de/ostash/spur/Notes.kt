@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import android.media.ExifInterface
+import android.widget.Toast
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -46,14 +47,20 @@ import java.util.UUID
 
 private val dayFmt = DateTimeFormatter.ofPattern("dd.MM.")
 
-/** Foto aufnehmen: Kamera-App öffnen, Bild verkleinern, merken und zum Abgleich vormerken. */
+/**
+ * Foto aufnehmen als Serie: Nach jedem gespeicherten Bild geht die Kamera sofort wieder auf.
+ * Fertig ist man, wenn man die Kamera ohne Foto verlässt (Zurück-Taste). Jedes Foto wird sofort gespeichert.
+ */
 @Composable
 fun rememberPhotoTaker(siteId: Long?, onTaken: () -> Unit): () -> Unit {
     val ctx = LocalContext.current
     var pending by remember { mutableStateOf<Triple<File, String, Long>?>(null) }
+    val count = remember { intArrayOf(0) }
+    val again = remember { arrayOf<() -> Unit>({}) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val p = pending
         pending = null
+        var saved = false
         if (p != null) {
             val (raw, clientId, takenAt) = p
             if (ok && raw.exists() && raw.length() > 0) {
@@ -61,13 +68,24 @@ fun rememberPhotoTaker(siteId: Long?, onTaken: () -> Unit): () -> Unit {
                 if (shrinkJpeg(raw, out)) {
                     Db.get(ctx).addPhoto(clientId, out.absolutePath, siteId, takenAt)
                     SyncWorker.enqueue(ctx)
-                    onTaken()
+                    count[0] += 1
+                    saved = true
                 }
             }
             raw.delete()
         }
+        if (saved) {
+            Toast.makeText(ctx, "Foto ${count[0]} gespeichert. Zurück-Taste = fertig.", Toast.LENGTH_SHORT).show()
+            again[0]()
+        } else {
+            if (count[0] > 0) {
+                Toast.makeText(ctx, "${count[0]} Foto(s) gespeichert.", Toast.LENGTH_LONG).show()
+                onTaken()
+            }
+            count[0] = 0
+        }
     }
-    return {
+    val start: () -> Unit = {
         val dir = File(ctx.filesDir, "photos").apply { mkdirs() }
         val clientId = "photo-" + UUID.randomUUID().toString()
         val raw = File(dir, "raw-$clientId.jpg")
@@ -75,6 +93,8 @@ fun rememberPhotoTaker(siteId: Long?, onTaken: () -> Unit): () -> Unit {
         val uri: Uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", raw)
         launcher.launch(uri)
     }
+    again[0] = start
+    return { count[0] = 0; start() }
 }
 
 /** Verkleinert auf höchstens 1600 Punkte Kantenlänge, dreht nach den Kameradaten, speichert als JPEG. */

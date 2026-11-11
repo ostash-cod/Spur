@@ -286,7 +286,7 @@ fun SheetButton(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>) {
         Text("Dieser Tag ist abgeschlossen. Änderungen macht nur der Chef.", color = Color(0xFF6A6F75), fontSize = 13.sp)
         return
     }
-    androidx.compose.material3.OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+    androidx.compose.material3.OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1B1C1E)), border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF1B1C1E))) {
         Text("📋 Zettel für diesen Tag prüfen und abgeben", fontWeight = FontWeight.Bold)
     }
     if (open) SheetDialog(day, now, siteMap, onDismiss = { open = false })
@@ -305,7 +305,7 @@ fun WeekSubmitButton(now: Long, siteMap: Map<Long, SiteRow>) {
         Text("Diese Woche ist abgegeben.", color = Color(0xFF6A6F75), fontSize = 13.sp)
         return
     }
-    androidx.compose.material3.OutlinedButton(onClick = { confirm = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+    androidx.compose.material3.OutlinedButton(onClick = { confirm = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1B1C1E)), border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF1B1C1E))) {
         Text("✅ Woche abgeben", fontWeight = FontWeight.Bold)
     }
     doneMsg?.let { Text(it, color = Color(0xFF2E7D32), fontSize = 14.sp) }
