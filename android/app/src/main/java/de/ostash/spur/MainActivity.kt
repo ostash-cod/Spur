@@ -57,6 +57,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -235,6 +236,7 @@ fun MainScreen() {
     var positionSite by remember { mutableStateOf<SiteRow?>(null) }
     var showSaveHaendler by remember { mutableStateOf(false) }
     var nameStop by remember { mutableStateOf<StopRow?>(null) }
+    var visitStop by remember { mutableStateOf<StopRow?>(null) }
     var confirmPause by remember { mutableStateOf<StopRow?>(null) }
     var changeStop by remember { mutableStateOf<StopRow?>(null) }
     var menuSite by remember { mutableStateOf<SiteRow?>(null) }
@@ -436,6 +438,7 @@ fun MainScreen() {
                         SyncWorker.enqueue(ctx)
                     },
                     onStopAtSite = { st, site -> answerAtSite(st, site) },
+                    onStopVisit = { visitStop = it },
                     onStopChange = { changeStop = it },
                   )
                 }
@@ -539,6 +542,17 @@ fun MainScreen() {
         )
     }
 
+    visitStop?.let { st ->
+        VisitDialog(st, sites, onDismiss = { visitStop = null }) { site, activity ->
+            val open = day?.let { db.openSegment(it.id) }
+            if (day != null && (open == null || open.startedAt <= st.startedAt)) db.endOpenSegment(day.id, st.startedAt)
+            db.answerStop(st, "work", site.id, activity)
+            visitStop = null
+            changeStop = null
+            SyncWorker.enqueue(ctx)
+        }
+    }
+
     changeStop?.let { st ->
         AlertDialog(
             onDismissRequest = { changeStop = null },
@@ -551,6 +565,7 @@ fun MainScreen() {
                     }
                     Button(onClick = { confirmPause = st }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5159), contentColor = Color.White)) { Text("Pause") }
                     Button(onClick = { nameStop = st }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) { Text("Ort benennen") }
+                    Button(onClick = { visitStop = st }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A4C93), contentColor = Color.White)) { Text("Besichtigung / Termin") }
                     OutlinedButton(onClick = {
                         db.answerStop(st, "travel", null)
                         changeStop = null
@@ -652,6 +667,7 @@ fun TodayScreen(
     onStopName: (StopRow) -> Unit,
     onStopContinue: (StopRow) -> Unit,
     onStopAtSite: (StopRow, SiteRow) -> Unit,
+    onStopVisit: (StopRow) -> Unit,
     onStopChange: (StopRow) -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -722,7 +738,7 @@ fun TodayScreen(
 
         for (stop in stops) {
             val nearby = nearSites(sites, stop)
-            StopCard(stop, nearby, onStopPause, onStopName, onStopContinue, onStopAtSite)
+            StopCard(stop, nearby, onStopPause, onStopName, onStopContinue, onStopAtSite, onStopVisit)
         }
 
         if (timeline.isNotEmpty()) {
@@ -969,7 +985,7 @@ suspend fun downloadAndInstall(ctx: android.content.Context, onProgress: (Int) -
 
 /** Nachfrage nach einem Halt an einem unbekannten Ort. */
 @Composable
-fun StopCard(stop: StopRow, nearby: List<SiteRow>, onPause: (StopRow) -> Unit, onName: (StopRow) -> Unit, onContinue: (StopRow) -> Unit, onAtSite: (StopRow, SiteRow) -> Unit) {
+fun StopCard(stop: StopRow, nearby: List<SiteRow>, onPause: (StopRow) -> Unit, onName: (StopRow) -> Unit, onContinue: (StopRow) -> Unit, onAtSite: (StopRow, SiteRow) -> Unit, onVisit: (StopRow) -> Unit) {
     val since = timeFmt.format(Instant.ofEpochMilli(stop.startedAt))
     val until = stop.endedAt?.let { timeFmt.format(Instant.ofEpochMilli(it)) }
     Column(
@@ -986,8 +1002,47 @@ fun StopCard(stop: StopRow, nearby: List<SiteRow>, onPause: (StopRow) -> Unit, o
         }
         Button(onClick = { onPause(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5159), contentColor = Color.White)) { Text("Pause") }
         Button(onClick = { onName(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) { Text("Ort benennen (zum Beispiel Brillux)") }
+        Button(onClick = { onVisit(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A4C93), contentColor = Color.White)) { Text("Besichtigung / Termin (nicht bezahlt)") }
         OutlinedButton(onClick = { onContinue(stop) }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Weiter wie Fahrt") }
     }
+}
+
+val ACTIVITY_LABELS = listOf(
+    "besichtigung" to "Besichtigung",
+    "aufmass" to "Aufmaß",
+    "besprechung" to "Besprechung mit Bauherr",
+    "sonstiges" to "Sonstiges",
+)
+
+/** Besichtigung oder Termin bei einer Baustelle eintragen: erst die Art, dann die Baustelle. Ob es berechnet wird, entscheidet nur der Chef. */
+@Composable
+fun VisitDialog(stop: StopRow, sites: List<SiteRow>, onDismiss: () -> Unit, onPick: (SiteRow, String) -> Unit) {
+    var activity by remember { mutableStateOf("besichtigung") }
+    val list = sites.filter { it.system == null && it.kind == "baustelle" }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Besichtigung / Termin") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Ab ${timeFmt.format(Instant.ofEpochMilli(stop.startedAt))} Uhr. Was war das?")
+                for ((key, label) in ACTIVITY_LABELS) {
+                    Row(Modifier.fillMaxWidth().clickable { activity = key }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = activity == key, onClick = { activity = key })
+                        Text(label, fontSize = 16.sp)
+                    }
+                }
+                Text("Zu welcher Baustelle gehört es?", fontWeight = FontWeight.Bold)
+                Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (site in list) {
+                        Button(onClick = { onPick(site, activity) }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A4C93), contentColor = Color.White)) { Text(site.name, maxLines = 1) }
+                    }
+                    if (list.isEmpty()) Text("Es gibt noch keine Baustelle.", color = Color(0xFF6A6F75))
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
+    )
 }
 
 /** Lange Kachel in der Farbe der Baustelle. Die laufende Baustelle hat einen dicken dunklen Rand. */

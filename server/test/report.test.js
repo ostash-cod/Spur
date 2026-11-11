@@ -129,3 +129,14 @@ test('Route: PDF für einen Kunden, nur für den Chef, mit Prüfung der Eingaben
   const noMoney = await app.inject({ method: 'POST', url: '/api/reports/customer', payload: { ...payload, options: { cols: { amount: false } } }, headers: auth(bossToken) });
   assert.equal(noMoney.statusCode, 200);
 });
+
+test('Besichtigung: Zeit sichtbar, aber 0 € (free); bei Abrechnung (bill) wie normale Arbeit', () => {
+  const normal = { ...seg(1, 'Wladi', '2026-05-26', '08:00', '09:00'), free: false };
+  const besicht = { ...seg(1, 'Wladi', '2026-05-26', '09:00', '10:00'), free: true };
+  const m = buildReportModel({ ...base, segments: [normal, besicht] });
+  const p = m.rows.find((r) => r.persons.length).persons[0];
+  assert.equal(p.netto, 2);
+  assert.equal(p.betrag, 55);
+  const m2 = buildReportModel({ ...base, segments: [normal, { ...besicht, free: false }] });
+  assert.equal(m2.rows.find((r) => r.persons.length).persons[0].betrag, 110);
+});

@@ -186,6 +186,8 @@ export function openDb(path = ':memory:') {
       INSERT INTO trip_marks (id, day_id, started_at, mode, site_id) SELECT id, day_id, started_at, mode, site_id FROM trip_marks_old;
       DROP TABLE trip_marks_old;`);
   }
+  if (!hasColumn('segments', 'activity')) db.exec('ALTER TABLE segments ADD COLUMN activity TEXT');
+  if (!hasColumn('segments', 'billing')) db.exec('ALTER TABLE segments ADD COLUMN billing TEXT');
   if (!hasColumn('sites', 'kind')) db.exec("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'");
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {

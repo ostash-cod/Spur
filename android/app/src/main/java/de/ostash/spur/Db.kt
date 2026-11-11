@@ -67,13 +67,14 @@ data class SegmentRow(
     val startedAt: Long,
     val endedAt: Long?,
     val source: String,
+    val activity: String? = null,
 )
 
 /**
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 10) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 11) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -176,6 +177,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
                 started_at INTEGER NOT NULL,
                 ended_at INTEGER,
                 source TEXT NOT NULL DEFAULT 'manual',
+                activity TEXT,
                 dirty INTEGER NOT NULL DEFAULT 1)""",
         )
     }
@@ -199,6 +201,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             found
         }
         if (!hasExtra) db.execSQL("ALTER TABLE sites ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
+        val hasActivity = db.rawQuery("PRAGMA table_info(segments)", null).use { c ->
+            var found = false
+            while (c.moveToNext()) if (c.getString(1) == "activity") found = true
+            found
+        }
+        if (!hasActivity) db.execSQL("ALTER TABLE segments ADD COLUMN activity TEXT")
     }
 
     fun dayById(id: Long): DayRow? =
@@ -370,9 +378,10 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
         startedAt = c.getLong(5),
         endedAt = if (c.isNull(6)) null else c.getLong(6),
         source = c.getString(7),
+        activity = if (c.isNull(8)) null else c.getString(8),
     )
 
-    private val segmentColumns = "id, day_id, client_id, site_id, kind, started_at, ended_at, source"
+    private val segmentColumns = "id, day_id, client_id, site_id, kind, started_at, ended_at, source, activity"
 
     fun openSegment(dayId: Long): SegmentRow? =
         readableDatabase.rawQuery(
@@ -714,17 +723,29 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
      * Gibt es zum Halt schon einen Abschnitt, wird er geändert, sonst entsteht ein neuer.
      */
     @Synchronized
-    fun answerStop(stop: StopRow, kind: String, siteId: Long?) {
+    fun answerStop(stop: StopRow, kind: String, siteId: Long?, activity: String? = null) {
         val existing = stop.segClientId
         if (existing != null) {
             updateSegment(existing, kind, if (kind == "work") siteId else null)
+            setSegmentActivity(existing, activity)
             finishStop(stop.id, existing)
         } else if (kind == "travel") {
             finishStop(stop.id, null)
         } else {
             val cid = insertSegment(stop.dayId, if (kind == "work") siteId else null, kind, stop.startedAt, stop.endedAt)
+            setSegmentActivity(cid, activity)
             finishStop(stop.id, cid)
         }
+    }
+
+    /** Art des Termins (besichtigung, aufmass, besprechung, sonstiges) oder null für normale Arbeit. */
+    @Synchronized
+    fun setSegmentActivity(clientId: String, activity: String?) {
+        val cv = ContentValues().apply {
+            if (activity != null) put("activity", activity) else putNull("activity")
+            put("dirty", 1)
+        }
+        writableDatabase.update("segments", cv, "client_id = ?", arrayOf(clientId))
     }
 
     companion object {

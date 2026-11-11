@@ -85,7 +85,8 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                                 .put("kind", s.kind)
                                 .put("started_at", s.startedAt)
                                 .put("ended_at", s.endedAt ?: JSONObject.NULL)
-                                .put("source", s.source),
+                                .put("source", s.source)
+                                .put("activity", s.activity ?: JSONObject.NULL),
                         )
                     }
                     try {

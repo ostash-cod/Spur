@@ -301,3 +301,25 @@ test('Umlaute: Handy-Tastatur (zerlegt) und PC (zusammengesetzt) ergeben denselb
   }
   assert.equal((await login2('anderer code 1234567')).statusCode, 401);
 });
+
+test('Besichtigung: Art wird gespeichert, nur der Chef setzt die Abrechnung', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Mitarbeiter' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+  const t0 = Date.UTC(2026, 10, 2, 6, 0, 0);
+  const day = (await app2.inject({ method: 'POST', url: '/api/days', headers: auth(wt), payload: { client_id: 'day-12345678', started_at: t0, ended_at: null } })).json();
+  const seg = { client_id: 'seg-12345678', kind: 'work', started_at: t0, ended_at: t0 + 3_600_000, activity: 'besichtigung' };
+  const r = await app2.inject({ method: 'POST', url: `/api/days/${day.id}/segments`, headers: auth(wt), payload: { segments: [seg, { ...seg, client_id: 'seg-87654321', activity: 'quatsch' }] } });
+  assert.equal(r.statusCode, 200);
+  const list = (await app2.inject({ method: 'GET', url: `/api/days?user_id=${w.id}&from=${t0 - 1000}&to=${t0 + 86_400_000}`, headers: auth(at) })).json();
+  const segs = list[0].segments;
+  assert.equal(segs.find((s) => s.client_id === 'seg-12345678').activity, 'besichtigung');
+  assert.equal(segs.find((s) => s.client_id === 'seg-87654321').activity, null);
+  const id = segs[0].id;
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${id}`, headers: auth(wt), payload: { billing: 'bill' } })).statusCode, 403);
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${id}`, headers: auth(at), payload: { billing: 'bill' } })).statusCode, 200);
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${id}`, headers: auth(at), payload: { billing: 'x' } })).statusCode, 400);
+});

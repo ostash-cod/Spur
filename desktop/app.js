@@ -1110,7 +1110,7 @@ function assignTrips(blocks, marks, siteById) {
   }
 }
 
-function timelineView(day, siteById, onTrip) {
+function timelineView(day, siteById, onTrip, onVisit) {
   const blocks = buildBlocks(day, siteById);
   if (!blocks.length) return h('p', { class: 'hint' }, 'Noch keine Zeit gebucht.');
   const t0 = Math.floor(day.started_at / 3600000) * 3600000;
@@ -1145,17 +1145,49 @@ function timelineView(day, siteById, onTrip) {
       const color = b.site?.color ?? '#B8BCC2';
       const fg = isLight(color) ? '#1B1C1E' : '#FFFFFF';
       const name = b.seg.kind === 'break' ? 'Pause' : b.seg.kind === 'private' ? 'Privat' : b.site?.name ?? 'Ohne Baustelle';
+      const act = b.seg.activity ? ACTIVITY_NAME[b.seg.activity] : null;
+      const billNote = act ? ` · ${BILLING_NAME[b.seg.billing ?? 'free']}` : '';
+      const actStyle = act ? `background:repeating-linear-gradient(135deg,#6A4C93 0 12px,${color} 12px 24px);color:#1B1C1E;cursor:pointer;` : `background:${color};color:${fg};`;
       box.append(
         h(
           'div',
-          { class: 'block site', style: `top:${top}px;height:${height}px;background:${color};color:${fg}` },
-          h('div', {}, h('strong', {}, `${name} · ${dur}`), height >= 44 ? h('div', { class: 'small' }, `${times}${b.site?.customer_name ? ` · ${b.site.customer_name}` : ''}${b.seg.source === 'auto' ? ' · automatisch' : ''}`) : null),
+          { class: `block site${act ? ' striped clickable' : ''}`, title: act ? 'Klicken: Abrechnung ändern' : '', onclick: act && onVisit ? () => onVisit(b.seg) : null, style: `top:${top}px;height:${height}px;${actStyle}` },
+          h('div', {}, h('strong', { class: act ? 'on-stripe' : '' }, `${act ? act + ' · ' : ''}${name} · ${dur}${billNote}`), height >= 44 ? h('div', { class: 'small' }, `${times}${b.site?.customer_name ? ` · ${b.site.customer_name}` : ''}${b.seg.source === 'auto' ? ' · automatisch' : ''}`) : null),
         ),
       );
     }
   }
   box.style.height = `${Math.max(Math.round(totalMin * PX_PER_MIN), prevBottom + 4)}px`;
   return box;
+}
+
+const ACTIVITY_NAME = { besichtigung: 'Besichtigung', aufmass: 'Aufmaß', besprechung: 'Besprechung', sonstiges: 'Termin' };
+const BILLING_NAME = { bill: 'wird berechnet', free: 'nicht berechnet, 0 € im Bericht', hide: 'nicht im Bericht' };
+
+// Termin (Besichtigung, Aufmaß ...): nur der Chef entscheidet, ob er berechnet wird.
+function visitDialog(seg) {
+  const cur = seg.billing ?? 'free';
+  const err = h('p', { class: 'error' });
+  const save = async (billing) => {
+    try {
+      await api(`/segments/${seg.id}`, { method: 'PATCH', body: { billing } });
+      d.close();
+      route();
+    } catch (ex) {
+      err.textContent = ex.message;
+    }
+  };
+  const btn = (key, text) => h('button', { class: cur === key ? 'primary' : '', onclick: () => save(key) }, text);
+  const d = openDialog(
+    h('h2', {}, `${ACTIVITY_NAME[seg.activity] ?? 'Termin'} · ${fmtTime(seg.started_at)} bis ${seg.ended_at ? fmtTime(seg.ended_at) : 'läuft'}`),
+    h('p', { class: 'hint' }, `Jetzt: ${BILLING_NAME[cur]}. Der Lohn ändert sich dadurch nicht.`),
+    h('div', { class: 'actions', style: 'margin-top:14px;flex-wrap:wrap' },
+      btn('free', 'Nicht berechnet, aber zeigen (0 €)'),
+      btn('bill', 'Berechnen'),
+      btn('hide', 'Nicht im Kundenbericht zeigen'),
+      h('button', { onclick: () => d.close() }, 'Abbrechen')),
+    err,
+  );
 }
 
 const KIND_LABEL = { work: 'Arbeit', travel: 'Anfahrt', private: 'Privat', break: 'Pause' };
@@ -1306,7 +1338,7 @@ async function tagesansicht(main, userId, dateStr) {
           { class: 'card' },
           h('h2', {}, `${fmtTime(d.started_at)} bis ${d.ended_at ? fmtTime(d.ended_at) : 'läuft noch'} · ${fmtDuration(end - d.started_at)}`),
           h('p', { class: 'hint' }, `${d.points.length} GPS-Punkte`),
-          timelineView(d, siteById, (trip) => tripDialog(d, trip, sites)),
+          timelineView(d, siteById, (trip) => tripDialog(d, trip, sites), (seg) => visitDialog(seg)),
           h('details', { style: 'margin:10px 0' }, h('summary', {}, 'Abschnitte als Liste'), segmentList(d, siteById)),
           h('details', {}, h('summary', {}, 'Gefahrener Weg mit Baustellen, Lager und Firma (Kreise = Erkennungsradius)'), trackSvg(d.points, sites)),
         );

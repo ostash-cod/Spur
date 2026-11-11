@@ -84,10 +84,11 @@ export function buildReportModel({ segments, breaks = [], customer, rate = null,
     if (k < from || k > to) continue;
     if (!days.has(k)) days.set(k, new Map());
     const people = days.get(k);
-    const p = people.get(s.userId) ?? { userId: s.userId, name: s.name, start: s.start, end: s.end, workMs: 0, breakMs: 0 };
+    const p = people.get(s.userId) ?? { userId: s.userId, name: s.name, start: s.start, end: s.end, workMs: 0, breakMs: 0, freeMs: 0 };
     p.start = Math.min(p.start, s.start);
     p.end = Math.max(p.end, s.end);
     p.workMs += s.end - s.start;
+    if (s.free) p.freeMs += s.end - s.start;
     people.set(s.userId, p);
   }
   if (o.cols.pause) {
@@ -110,7 +111,8 @@ export function buildReportModel({ segments, breaks = [], customer, rate = null,
       const minutes = step ? Math.ceil(workMin / step - 1e-9) * step : Math.round(workMin);
       const netto = round2(minutes / 60);
       const pause = round2(Math.round(p.breakMs / 60000) / 60);
-      const betrag = round2(netto * (rate ?? 0));
+      const freeNetto = round2(Math.round(p.freeMs / 60000) / 60);
+      const betrag = round2(Math.max(0, netto - freeNetto) * (rate ?? 0));
       nettoSum += netto;
       amountSum += betrag;
       return { name: p.name, von: clock(p.start), bis: clock(p.end), pause, brutto: round2(netto + pause), netto, satz: rate, betrag };
@@ -134,7 +136,7 @@ export function loadCustomerSegments(db, customerId, from, to) {
   const hi = parseKey(to) + 3 * DAY_MS;
   const rows = db
     .prepare(
-      `SELECT s.kind AS kind, s.started_at AS start, s.ended_at AS end, d.user_id AS userId, u.name AS name, si.customer_id AS customerId
+      `SELECT s.kind AS kind, s.started_at AS start, s.ended_at AS end, s.activity AS activity, s.billing AS billing, d.user_id AS userId, u.name AS name, si.customer_id AS customerId
        FROM segments s
        JOIN days d ON d.id = s.day_id
        JOIN users u ON u.id = d.user_id
@@ -143,7 +145,9 @@ export function loadCustomerSegments(db, customerId, from, to) {
     )
     .all(lo, hi);
   return {
-    segments: rows.filter((r) => r.kind === 'work' && r.customerId === customerId),
+    segments: rows
+      .filter((r) => r.kind === 'work' && r.customerId === customerId && !(r.activity && r.billing === 'hide'))
+      .map((r) => ({ ...r, free: !!r.activity && r.billing !== 'bill' })),
     breaks: rows.filter((r) => r.kind === 'break'),
   };
 }

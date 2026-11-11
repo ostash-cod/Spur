@@ -310,6 +310,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       return reply.code(400).send({ error: 'Es werden 1 bis 200 Abschnitte erwartet' });
     }
     const KINDS = ['work', 'travel', 'private', 'break'];
+    const ACTIVITIES = ['besichtigung', 'aufmass', 'besprechung', 'sonstiges'];
     for (const s of list) {
       if (typeof s?.client_id !== 'string' || s.client_id.length < 8 || s.client_id.length > 64) return reply.code(400).send({ error: 'client_id fehlt' });
       if (!validTs(s.started_at) || (s.ended_at != null && (!validTs(s.ended_at) || s.ended_at < s.started_at))) return reply.code(400).send({ error: 'Zeit ungültig' });
@@ -317,18 +318,28 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       if (s.site_id != null && !db.prepare('SELECT 1 FROM sites WHERE id = ?').get(Number(s.site_id))) return reply.code(400).send({ error: 'Baustelle nicht gefunden' });
     }
     const upsert = db.prepare(
-      `INSERT INTO segments (day_id, client_id, site_id, kind, started_at, ended_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(day_id, client_id) DO UPDATE SET site_id = excluded.site_id, kind = excluded.kind, started_at = excluded.started_at, ended_at = excluded.ended_at`,
+      `INSERT INTO segments (day_id, client_id, site_id, kind, started_at, ended_at, source, activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(day_id, client_id) DO UPDATE SET site_id = excluded.site_id, kind = excluded.kind, started_at = excluded.started_at, ended_at = excluded.ended_at, activity = excluded.activity`,
     );
     db.exec('BEGIN');
     try {
-      for (const s of list) upsert.run(day.id, s.client_id, s.site_id ?? null, s.kind ?? 'work', s.started_at, s.ended_at ?? null, s.source === 'auto' ? 'auto' : 'manual');
+      for (const s of list) upsert.run(day.id, s.client_id, s.site_id ?? null, s.kind ?? 'work', s.started_at, s.ended_at ?? null, s.source === 'auto' ? 'auto' : 'manual', ACTIVITIES.includes(s.activity) ? s.activity : null);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
     }
     return { saved: list.length };
+  });
+
+  // Chef entscheidet, ob ein Termin (Besichtigung, Aufmaß ...) berechnet wird: 'bill' | 'free' (zeigen, 0 €) | 'hide'.
+  app.patch('/api/segments/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const seg = db.prepare('SELECT id FROM segments WHERE id = ?').get(Number(req.params.id));
+    if (!seg) return reply.code(404).send({ error: 'Abschnitt nicht gefunden' });
+    const b = req.body ?? {};
+    if (b.billing !== null && !['bill', 'free', 'hide'].includes(b.billing)) return reply.code(400).send({ error: 'Abrechnung ungültig' });
+    db.prepare('UPDATE segments SET billing = ? WHERE id = ?').run(b.billing, seg.id);
+    return { ok: true };
   });
 
   // Chef: Tage eines Mitarbeiters in einem Zeitraum (from/to in Millisekunden), mit allen Punkten.
@@ -343,7 +354,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       .prepare('SELECT id, started_at, ended_at FROM days WHERE user_id = ? AND started_at >= ? AND started_at < ? ORDER BY started_at')
       .all(userId, from, to);
     const pointStmt = db.prepare('SELECT ts, lat, lng, acc FROM points WHERE day_id = ? ORDER BY ts');
-    const segStmt = db.prepare('SELECT client_id, site_id, kind, started_at, ended_at, source FROM segments WHERE day_id = ? ORDER BY started_at');
+    const segStmt = db.prepare('SELECT id, client_id, site_id, kind, started_at, ended_at, source, activity, billing FROM segments WHERE day_id = ? ORDER BY started_at');
     const markStmt = db.prepare('SELECT started_at, mode, site_id FROM trip_marks WHERE day_id = ? ORDER BY started_at');
     return days.map((d) => ({ ...d, points: pointStmt.all(d.id), segments: segStmt.all(d.id), trip_marks: markStmt.all(d.id) }));
   });
