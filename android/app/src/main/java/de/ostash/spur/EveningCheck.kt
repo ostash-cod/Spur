@@ -20,8 +20,14 @@ sealed class EveningStep {
 
 /** Reine Rechenlogik (ohne Android): Abendfrage, automatisches Ende, Mitternachts-Sicherung. */
 object EveningPlan {
-    const val ANSWER_WAIT_MIN = 15L
+    /** So viele Fragen im Abstand von [GAP_MIN] Minuten, danach endet der Tag ohne Antwort. */
+    const val MAX_ASKS = 3
+    const val GAP_MIN = 15L
+    /** Auf der Baustelle wird nur gefragt, nie beendet, und dann seltener. */
+    const val ON_SITE_GAP_MIN = 60L
     const val ASK_AGAIN_MIN = 120L
+    /** Unterwegs im Auto wird nichts gefragt: später noch einmal nachsehen. */
+    const val MOVING_RECHECK_MIN = 5L
     const val DEFAULT_ASK_MINUTE = 18 * 60
 
     /** Spätestens um Mitternacht nach dem Tagesbeginn ist Schluss. */
@@ -37,15 +43,53 @@ object EveningPlan {
         return t
     }
 
-    fun decide(now: Long, dayStart: Long, lastYes: Long, pending: Long, askMinute: Int, zone: ZoneId): EveningStep {
+    /**
+     * @param first Zeitpunkt der ersten Frage der laufenden Runde (0 = keine Runde)
+     * @param asks wie oft in dieser Runde schon gefragt wurde
+     * @param lastAsk Zeitpunkt der letzten Frage (0 = noch nie)
+     */
+    fun decide(
+        now: Long, dayStart: Long, lastYes: Long, first: Long, asks: Int, lastAsk: Long,
+        onSite: Boolean, moving: Boolean, askMinute: Int, zone: ZoneId,
+    ): EveningStep {
         val hard = hardStop(dayStart, zone)
         if (now >= hard) return EveningStep.EndAt(hard)
-        if (pending > 0) {
-            val auto = pending + ANSWER_WAIT_MIN * 60_000L
-            return if (now >= auto) EveningStep.EndAt(minOf(pending, hard)) else EveningStep.WaitUntil(minOf(auto, hard))
+        if (moving) return EveningStep.WaitUntil(minOf(now + MOVING_RECHECK_MIN * 60_000L, hard))
+        if (first > 0 && !onSite) {
+            val next = lastAsk + GAP_MIN * 60_000L
+            if (now < next) return EveningStep.WaitUntil(minOf(next, hard))
+            return if (asks >= MAX_ASKS) EveningStep.EndAt(minOf(first, hard)) else EveningStep.Ask
         }
-        val ask = askAt(dayStart, lastYes, askMinute, zone)
+        var ask = askAt(dayStart, lastYes, askMinute, zone)
+        if (onSite && lastAsk > 0) ask = maxOf(ask, lastAsk + ON_SITE_GAP_MIN * 60_000L)
         return if (now >= ask) EveningStep.Ask else EveningStep.WaitUntil(minOf(ask, hard))
+    }
+}
+
+/** Lauter Kanal: Alarmton und Alarmlautstärke, damit die Frage im Auto und auf der Baustelle gehört wird. */
+object LoudChannel {
+    fun ensure(ctx: Context, id: String, name: String, sound: Boolean = true, vibrate: Boolean = true): String {
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(id) == null) {
+            val ch = NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH)
+            ch.enableVibration(vibrate)
+            if (vibrate) ch.vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
+            if (sound) {
+                val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                    ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                ch.setSound(
+                    uri,
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build(),
+                )
+            } else {
+                ch.setSound(null, null)
+            }
+            nm.createNotificationChannel(ch)
+        }
+        return id
     }
 }
 
@@ -60,7 +104,7 @@ object EveningCheck {
     private const val ARRIVAL_NOTIFICATION_ID = 5
     private const val NOTIFICATION_ID = 4
     private const val ALARM_CODE = 200
-    private const val CHANNEL = "evening_check"
+    private const val CHANNEL = "evening_loud"
 
     private fun zone() = ZoneId.systemDefault()
 
@@ -76,16 +120,50 @@ object EveningCheck {
 
     /** Ein neuer Tag beginnt: alte Antworten vergessen, Wecker stellen. */
     fun dayStarted(ctx: Context) {
-        Prefs.setEveningPending(ctx, 0L)
+        resetRound(ctx)
         Prefs.setEveningLastYes(ctx, 0L)
+        Prefs.setEveningLastAsk(ctx, 0L)
         cancelNotification(ctx)
         schedule(ctx)
     }
 
+    private fun resetRound(ctx: Context) {
+        Prefs.setEveningPending(ctx, 0L)
+        Prefs.setEveningAsks(ctx, 0)
+    }
+
+    /** Alles, was für die Entscheidung gebraucht wird: Läuft man gerade? Ist man auf einer Baustelle? */
+    private fun step(ctx: Context, day: DayRow, now: Long): EveningStep {
+        val db = Db.get(ctx)
+        val sites = db.sites().associateBy { it.id }
+        val open = db.openSegment(day.id)
+        val onSite = open != null && open.kind == "work" && open.siteId != null && sites[open.siteId]?.let { it.system == null && it.kind == "baustelle" } == true
+        val recent = db.pointsSince(day.id, now - 5 * 60_000L)
+        val moving = recent.size >= 2 && distanceMeters(recent.first().lat, recent.first().lng, recent.last().lat, recent.last().lng) > 300.0
+        return EveningPlan.decide(
+            now, day.startedAt, Prefs.eveningLastYes(ctx), Prefs.eveningPending(ctx), Prefs.eveningAsks(ctx), Prefs.eveningLastAsk(ctx),
+            onSite, moving, Prefs.eveningAskMinute(ctx), zone(),
+        )
+    }
+
+    /** Ende ohne Antwort: bei Ankunft in Firma oder Lager nach der letzten Baustelle gilt die Ankunft, sonst die Zeit der ersten Frage. */
+    private fun endTime(ctx: Context, day: DayRow, first: Long): Long {
+        val db = Db.get(ctx)
+        val sites = db.sites().associateBy { it.id }
+        val segs = db.segmentsOfDay(day.id)
+        val lastWorkEnd = segs.filter { it.kind == "work" && it.siteId != null && sites[it.siteId]?.system == null }.mapNotNull { it.endedAt }.maxOrNull()
+        val open = db.openSegment(day.id)
+        if (open != null && lastWorkEnd != null && open.siteId != null && sites[open.siteId]?.system != null && open.startedAt >= lastWorkEnd && open.startedAt <= first) {
+            return open.startedAt
+        }
+        return first
+    }
+
     /** Der Tag wurde von Hand beendet. */
     fun dayEnded(ctx: Context) {
-        Prefs.setEveningPending(ctx, 0L)
+        resetRound(ctx)
         Prefs.setEveningLastYes(ctx, 0L)
+        Prefs.setEveningLastAsk(ctx, 0L)
         cancelNotification(ctx)
         ctx.getSystemService(AlarmManager::class.java).cancel(alarmIntent(ctx))
     }
@@ -104,7 +182,7 @@ object EveningCheck {
             return
         }
         val now = System.currentTimeMillis()
-        val step = EveningPlan.decide(now, day.startedAt, Prefs.eveningLastYes(ctx), Prefs.eveningPending(ctx), Prefs.eveningAskMinute(ctx), zone())
+        val step = step(ctx, day, now)
         val at = when (step) {
             is EveningStep.WaitUntil -> step.ts
             else -> now + 1_000L
@@ -118,10 +196,20 @@ object EveningCheck {
         val db = Db.get(ctx)
         val day = db.openDay() ?: run { dayEnded(ctx); return }
         val now = System.currentTimeMillis()
-        when (val step = EveningPlan.decide(now, day.startedAt, Prefs.eveningLastYes(ctx), Prefs.eveningPending(ctx), Prefs.eveningAskMinute(ctx), zone())) {
-            is EveningStep.EndAt -> autoEnd(ctx, step.ts)
+        when (val step = step(ctx, day, now)) {
+            is EveningStep.EndAt -> autoEnd(ctx, if (step.ts == EveningPlan.hardStop(day.startedAt, zone())) step.ts else endTime(ctx, day, step.ts))
             EveningStep.Ask -> {
-                Prefs.setEveningPending(ctx, now)
+                val sites = db.sites().associateBy { it.id }
+                val open = db.openSegment(day.id)
+                val onSite = open != null && open.kind == "work" && open.siteId != null && sites[open.siteId]?.let { it.system == null && it.kind == "baustelle" } == true
+                if (onSite) {
+                    // Auf der Baustelle nur fragen, nie beenden.
+                    resetRound(ctx)
+                } else {
+                    if (Prefs.eveningPending(ctx) == 0L) Prefs.setEveningPending(ctx, now)
+                    Prefs.setEveningAsks(ctx, Prefs.eveningAsks(ctx) + 1)
+                }
+                Prefs.setEveningLastAsk(ctx, now)
                 show(ctx)
                 schedule(ctx)
             }
@@ -143,7 +231,7 @@ object EveningCheck {
     }
 
     fun yes(ctx: Context) {
-        Prefs.setEveningPending(ctx, 0L)
+        resetRound(ctx)
         Prefs.setEveningLastYes(ctx, System.currentTimeMillis())
         cancelNotification(ctx)
         schedule(ctx)
@@ -165,11 +253,7 @@ object EveningCheck {
     fun askArrival(ctx: Context, at: Long) {
         if (Db.get(ctx).openDay() == null) return
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel(CHANNEL) == null) {
-            val ch = NotificationChannel(CHANNEL, "Abendfrage", NotificationManager.IMPORTANCE_HIGH)
-            ch.enableVibration(true)
-            nm.createNotificationChannel(ch)
-        }
+        LoudChannel.ensure(ctx, CHANNEL, "Abendfrage (laut)")
         val open = PendingIntent.getActivity(
             ctx, 5, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -209,23 +293,19 @@ object EveningCheck {
 
     private fun show(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel(CHANNEL) == null) {
-            val ch = NotificationChannel(CHANNEL, "Abendfrage", NotificationManager.IMPORTANCE_HIGH)
-            ch.enableVibration(true)
-            nm.createNotificationChannel(ch)
-        }
+        LoudChannel.ensure(ctx, CHANNEL, "Abendfrage (laut)")
         val open = PendingIntent.getActivity(
             ctx, 4, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val n = NotificationCompat.Builder(ctx, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setContentTitle("Spur: Arbeitest du noch?")
-            .setContentText("Ohne Antwort wird der Tag in ${EveningPlan.ANSWER_WAIT_MIN} Minuten beendet.")
+            .setContentText("Auf der Baustelle läuft der Tag weiter. Sonst endet er ohne Antwort nach der dritten Frage.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setContentIntent(open)
             .setAutoCancel(false)
-            .setTimeoutAfter(EveningPlan.ANSWER_WAIT_MIN * 60_000L)
+            .setTimeoutAfter(EveningPlan.GAP_MIN * 60_000L)
             .addAction(0, "Ja, ich arbeite noch", action(ctx, 21, ACTION_YES))
             .addAction(0, "Tag beenden", action(ctx, 22, ACTION_END))
             .build()

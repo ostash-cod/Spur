@@ -106,15 +106,8 @@ object Reminder {
 
     private fun channelFor(ctx: Context, cfg: ReminderConfig): String {
         // Ton und Vibration lassen sich bei einem bestehenden Kanal nicht mehr ändern, deshalb ein Kanal je Wahl.
-        val id = "reminder_${if (cfg.sound) "s" else "x"}${if (cfg.vibrate) "v" else "x"}"
-        val nm = ctx.getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel(id) == null) {
-            val ch = NotificationChannel(id, "Erinnerung Tagesbeginn", NotificationManager.IMPORTANCE_HIGH)
-            ch.enableVibration(cfg.vibrate)
-            if (!cfg.sound) ch.setSound(null, null)
-            nm.createNotificationChannel(ch)
-        }
-        return id
+        val id = "reminder_loud_${if (cfg.sound) "s" else "x"}${if (cfg.vibrate) "v" else "x"}"
+        return LoudChannel.ensure(ctx, id, "Erinnerung Tagesbeginn (laut)", cfg.sound, cfg.vibrate)
     }
 
     private fun action(ctx: Context, code: Int, action: String) = PendingIntent.getBroadcast(

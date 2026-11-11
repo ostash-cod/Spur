@@ -81,6 +81,10 @@ object Prefs {
     fun eveningAskMinute(c: Context): Int = sp(c).getInt("eve_ask", EveningPlan.DEFAULT_ASK_MINUTE).coerceIn(0, 24 * 60 - 1)
     fun eveningPending(c: Context): Long = sp(c).getLong("eve_pending", 0L)
     fun setEveningPending(c: Context, ts: Long) { sp(c).edit().putLong("eve_pending", ts).apply() }
+    fun eveningAsks(c: Context): Int = sp(c).getInt("eve_asks", 0)
+    fun setEveningAsks(c: Context, n: Int) { sp(c).edit().putInt("eve_asks", n).apply() }
+    fun eveningLastAsk(c: Context): Long = sp(c).getLong("eve_last", 0L)
+    fun setEveningLastAsk(c: Context, ts: Long) { sp(c).edit().putLong("eve_last", ts).apply() }
     fun eveningLastYes(c: Context): Long = sp(c).getLong("eve_yes", 0L)
     fun setEveningLastYes(c: Context, ts: Long) { sp(c).edit().putLong("eve_yes", ts).apply() }
     /** Tag, der automatisch beendet wurde (für den Hinweis am nächsten Morgen). */
