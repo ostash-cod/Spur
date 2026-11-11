@@ -56,12 +56,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -385,7 +383,7 @@ fun MainScreen() {
                 }
                 if (tab == 0) {
                     if (page != DAYS_BACK) {
-                        TextButton(onClick = { scope.launch { pagerState.animateScrollToPage(DAYS_BACK) } }) { Text("Heute", color = Gelb, fontWeight = FontWeight.Bold) }
+                        TextButton(onClick = { scope.launch { pagerState.animateScrollToPage(DAYS_BACK) } }) { Text("Heute", color = Color(0xFF1B1C1E), fontWeight = FontWeight.Bold) }
                     }
                     TextButton(onClick = { scope.launch { pagerState.animateScrollToPage((page + 1).coerceAtMost(DAYS_BACK)) } }, enabled = page < DAYS_BACK) {
                         Text("›", color = if (page < DAYS_BACK) Color.White else Color(0xFF55585D), fontSize = 30.sp)
