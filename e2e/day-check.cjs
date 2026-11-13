@@ -4,7 +4,7 @@ const fs = require('node:fs');
 let srv;
 (async () => {
   fs.rmSync('/tmp/spur-e2e2', { recursive: true, force: true });
-  srv = spawn('node', ['--no-warnings', '/home/claude/spur/server/src/index.js'], { env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e2', PORT: '3112' }, stdio: 'ignore' });
+  srv = spawn('node', ['--no-warnings', require('node:path').join(__dirname, '..', 'server', 'src', 'index.js')], { env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e2', PORT: '3112' }, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1500));
   const base = 'http://127.0.0.1:3112';
   const adminCode = fs.readFileSync('/tmp/spur-e2e2/erster-zugang.txt', 'utf8').match(/: ([A-Z0-9-]+)/)[1];
@@ -21,7 +21,9 @@ let srv;
   const points = [];
   for (let i = 0; i <= 60; i++) points.push({ ts: start + i * 15000, lat: 47.9667 + i * 0.0021 + Math.sin(i / 6) * 0.002, lng: 11.3167 + i * 0.0032, acc: 6 });
   const added = await j(`/api/days/${day.id}/points`, { points }, worker.token);
-  console.log('Punkte gespeichert:', added.added);
+  // Variante C: Der Server nimmt die Punkte eines Mitarbeiters nicht an.
+  if (added.added !== 0 || added.dropped !== points.length) throw new Error('Server hat Rohpunkte gespeichert: ' + JSON.stringify(added));
+  console.log('Punkte vom Server verworfen:', added.dropped);
   const s1 = await j('/api/sites', { name: 'Lilienstraße 77', lat: 48.12, lng: 11.6, customer_id: null }, admin.token);
   const s2 = await j('/api/sites', { name: 'Tutzing', lat: 47.9, lng: 11.28 }, admin.token);
   const sysSites = await j('/api/sites?all=1', null, admin.token);
@@ -47,12 +49,24 @@ let srv;
   await page.waitForSelector('.timeline .block');
   console.log('Überschrift:', await page.textContent('h1'));
   console.log('Karte:', (await page.textContent('.card h2')).trim());
-  console.log('Hinweis:', (await page.textContent('.card .hint')).trim());
   console.log('Abschnitte am Desktop:', (await page.locator('.card table tbody tr').allInnerTexts()).map((x) => x.replace(/\s+/g, ' ')).join(' | '));
+  if (await page.locator('summary:has-text("Gefahrener Weg")').count()) throw new Error('Karte ohne Testmodus sichtbar');
+  if (await page.locator('text=GPS-Punkte').count()) throw new Error('Zahl der GPS-Punkte ohne Testmodus sichtbar');
+  console.log('Keine Karte, keine Punktzahl: ok');
+  await page.screenshot({ path: '/tmp/spur-e2e2/tag.png', fullPage: true });
+
+  // Testmodus des Chefs: Sein eigener Tag zeigt die Karte.
+  const meAdmin = await j('/api/me', null, admin.token);
+  await fetch(base + '/api/users/' + meAdmin.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + admin.token }, body: JSON.stringify({ gps_test: true }) });
+  const aday = await j('/api/days', { client_id: 'e2e-chef-0001', started_at: start, ended_at: end }, admin.token);
+  const aadd = await j(`/api/days/${aday.id}/points`, { points }, admin.token);
+  if (aadd.added !== points.length) throw new Error('Testmodus speichert nicht: ' + JSON.stringify(aadd));
+  await page.goto(base + `/#/mitarbeiter/${meAdmin.id}`);
   await page.click('summary:has-text("Gefahrener Weg")');
   await page.waitForSelector('svg.track');
-  console.log('Kreise im Weg:', await page.locator('svg.track circle').count());
-  await page.screenshot({ path: '/tmp/spur-e2e2/tag.png', fullPage: true });
+  console.log('Testmodus Karte:', (await page.textContent('summary:has-text("Gefahrener Weg")')).trim());
+  await page.goto(base + `/#/mitarbeiter/${created.user.id}`);
+  await page.waitForSelector('.timeline .block');
   await page.click('text=← Vortag');
   await page.waitForSelector('text=An diesem Tag wurde nichts aufgezeichnet');
   console.log('Vortag leer: ok');

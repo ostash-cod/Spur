@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 class SyncWorker(private val ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        PointCleanup.run(ctx)
         val token = Prefs.token(ctx) ?: return@withContext Result.success()
         val db = Db.get(ctx)
         try {
@@ -29,6 +30,8 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                 Prefs.setAdmin(ctx, me.optString("role") == "admin")
                 Prefs.setCanReceipts(ctx, me.optBoolean("can_receipts", false))
                 Prefs.setHomeKm(ctx, if (me.isNull("home_km")) 0.0 else me.optDouble("home_km", 0.0))
+                Prefs.setUploadPoints(ctx, me.optBoolean("upload_points", false))
+                Prefs.setPointsHours(ctx, me.optInt("points_hours", 48))
             }
             // Aktuelle Baustellen vom Server holen (für die Kacheln).
             val sites = Api.getArray(ctx, "/api/sites", token)
@@ -64,14 +67,22 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                     db.setServerId(day.id, serverId)
                     db.clearDirty(day.id, day.endedAt)
                 }
+                // Variante C: Rohe GPS-Punkte gehen nur im Testmodus (oder mit Variante B) an den Server,
+                // und auch dann nie aus einer privaten Zeit. Sonst bleiben sie auf dem Handy.
+                val upload = Prefs.uploadPoints(ctx)
+                val privateTimes = if (upload) db.segmentsOfDay(day.id).filter { it.kind == "private" } else emptyList()
+                fun isPrivate(ts: Long) = privateTimes.any { ts >= it.startedAt && ts <= (it.endedAt ?: Long.MAX_VALUE) }
                 while (true) {
                     val points = db.unsyncedPoints(day.id, 200)
                     if (points.isEmpty()) break
-                    val arr = JSONArray()
-                    for (p in points) {
-                        arr.put(JSONObject().put("ts", p.ts).put("lat", p.lat).put("lng", p.lng).put("acc", p.acc.toDouble()))
+                    val send = if (upload) points.filterNot { isPrivate(it.ts) } else emptyList()
+                    if (send.isNotEmpty()) {
+                        val arr = JSONArray()
+                        for (p in send) {
+                            arr.put(JSONObject().put("ts", p.ts).put("lat", p.lat).put("lng", p.lng).put("acc", p.acc.toDouble()))
+                        }
+                        Api.post(ctx, "/api/days/$serverId/points", JSONObject().put("points", arr), token)
                     }
-                    Api.post(ctx, "/api/days/$serverId/points", JSONObject().put("points", arr), token)
                     db.markPointsSynced(points.map { it.id })
                 }
                 val segments = db.dirtySegments(day.id)
@@ -160,6 +171,7 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                     db.markPhotoSynced(p.id)
                 }
             }
+            PointCleanup.run(ctx)
             Prefs.setLastSync(ctx, System.currentTimeMillis())
             Result.success()
         } catch (e: Api.ApiException) {

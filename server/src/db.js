@@ -23,6 +23,10 @@ export const DEFAULT_SETTINGS = {
   ],
   km_rate_customer: 0.5,
   km_rate_employee: 0.3,
+  // Variante C: Rohe GPS-Punkte bleiben auf dem Handy und werden dort nach so vielen Stunden gelöscht (nach Tagesende).
+  phone_points_hours: 48,
+  // Variante B (Betriebsschalter): 0 = aus. 7 bis 14 = Handys schicken den Weg, der Server löscht ihn nach so vielen Tagen.
+  server_route_days: 0,
 };
 
 const SCHEMA = `
@@ -189,12 +193,40 @@ export function openDb(path = ':memory:') {
   if (!hasColumn('segments', 'activity')) db.exec('ALTER TABLE segments ADD COLUMN activity TEXT');
   if (!hasColumn('segments', 'billing')) db.exec('ALTER TABLE segments ADD COLUMN billing TEXT');
   if (!hasColumn('sites', 'kind')) db.exec("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'");
+  // Testmodus mit Karte: nur für den Chef, nur als Schalter. Dann schickt sein Handy den Weg an den Server.
+  if (!hasColumn('users', 'gps_test')) db.exec('ALTER TABLE users ADD COLUMN gps_test INTEGER NOT NULL DEFAULT 0');
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     insert.run(key, JSON.stringify(value));
   }
+  // Ab wann Variante C gilt. Ältere Punkte auf dem Server löscht nie ein Automatismus, nur Wladi selbst.
+  db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run('points_policy_since', JSON.stringify(Date.now()));
   ensureSystemSites(db);
   return db;
+}
+
+/** Darf dieser Benutzer GPS-Punkte an den Server schicken? Nur im Testmodus des Chefs oder mit Variante B. */
+export function mayUploadPoints(db, user) {
+  if (user.role === 'admin' && user.gps_test) return true;
+  return Number(getSettings(db).server_route_days) > 0;
+}
+
+/**
+ * Variante B: Punkte nach der eingestellten Zahl von Tagen löschen. Punkte aus dem Testmodus des Chefs bleiben.
+ * Punkte von vor Variante C werden hier nie angefasst (Wladi entscheidet darüber selbst).
+ */
+export function purgeRoutePoints(db, now = Date.now()) {
+  const s = getSettings(db);
+  const days = Number(s.server_route_days);
+  if (!(days > 0)) return 0;
+  const since = Number(s.points_policy_since) || now;
+  const cutoff = now - days * 86_400_000;
+  return Number(
+    db.prepare(
+      `DELETE FROM points WHERE ts >= ? AND ts < ? AND day_id IN (
+         SELECT d.id FROM days d JOIN users u ON u.id = d.user_id WHERE NOT (u.role = 'admin' AND u.gps_test = 1))`,
+    ).run(since, cutoff).changes,
+  );
 }
 
 const SYSTEM_SITES = {
