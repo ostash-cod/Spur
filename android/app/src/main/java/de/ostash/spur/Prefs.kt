@@ -26,6 +26,14 @@ object Prefs {
     fun setAdmin(c: Context, admin: Boolean) { sp(c).edit().putBoolean("admin", admin).apply() }
     fun canReceipts(c: Context): Boolean = sp(c).getBoolean("receipts", false)
     fun setCanReceipts(c: Context, v: Boolean) { sp(c).edit().putBoolean("receipts", v).apply() }
+
+    // --- Variante C: rohe GPS-Punkte bleiben auf dem Handy ---
+    /** Nur im Testmodus des Chefs (oder Variante B) schickt das Handy die Punkte. Vorgabe: nein. */
+    fun uploadPoints(c: Context): Boolean = sp(c).getBoolean("upload_points", false)
+    fun setUploadPoints(c: Context, v: Boolean) { sp(c).edit().putBoolean("upload_points", v).apply() }
+    /** Nach so vielen Stunden ab Tagesende werden die Punkte auf dem Handy gelöscht. */
+    fun pointsHours(c: Context): Int = sp(c).getInt("points_hours", 48)
+    fun setPointsHours(c: Context, v: Int) { sp(c).edit().putInt("points_hours", v.coerceIn(24, 168)).apply() }
     fun lastSync(c: Context): Long = sp(c).getLong("last_sync", 0L)
 
     fun setLastSync(c: Context, ts: Long) = sp(c).edit().putLong("last_sync", ts).apply()

@@ -1337,10 +1337,12 @@ async function tagesansicht(main, userId, dateStr) {
           'div',
           { class: 'card' },
           h('h2', {}, `${fmtTime(d.started_at)} bis ${d.ended_at ? fmtTime(d.ended_at) : 'läuft noch'} · ${fmtDuration(end - d.started_at)}`),
-          h('p', { class: 'hint' }, `${d.points.length} GPS-Punkte`),
           timelineView(d, siteById, (trip) => tripDialog(d, trip, sites), (seg) => visitDialog(seg)),
           h('details', { style: 'margin:10px 0' }, h('summary', {}, 'Abschnitte als Liste'), segmentList(d, siteById)),
-          h('details', {}, h('summary', {}, 'Gefahrener Weg mit Baustellen, Lager und Firma (Kreise = Erkennungsradius)'), trackSvg(d.points, sites)),
+          // Variante C: Der Weg liegt nur im Testmodus (oder bei alten Tagen) auf dem Server.
+          d.points.length
+            ? h('details', {}, h('summary', {}, `Gefahrener Weg (Testmodus, ${d.points.length} GPS-Punkte) mit Baustellen, Lager und Firma`), trackSvg(d.points, sites))
+            : null,
         );
       })
     : [h('div', { class: 'card placeholder' }, 'An diesem Tag wurde nichts aufgezeichnet.')];
@@ -1454,7 +1456,11 @@ async function einstellungen(main) {
           }
         }
         const rules = [...ruleRows.children].map((row) => [num(row.querySelector('.r-h').value), num(row.querySelector('.r-m').value)]);
+        const hours = Number($('pts-h').value);
+        const routeDays = Number($('route-d').value);
         const body = {
+          phone_points_hours: hours,
+          server_route_days: routeDays,
           company: { name: f.name.value, address: f.address.value, email: f.email.value },
           firma: place('firma'),
           lager: place('lager'),
@@ -1491,6 +1497,31 @@ async function einstellungen(main) {
       ruleRows,
       h('button', { type: 'button', class: 'small', onclick: () => addRule() }, 'Zeile hinzufügen'),
       h('p', { class: 'hint' }, 'Es gilt die längere Pause aus eingetragener Pause und dieser Staffel. Im Kundenbericht gibt es keinen Pausenabzug.'),
+    ),
+    h(
+      'div',
+      { class: 'card' },
+      h('h2', {}, 'Datenschutz: GPS-Punkte'),
+      h('p', { class: 'hint' }, 'Die Handys schicken nur fertige Abschnitte (Ort, Art, Beginn, Ende). Die rohen GPS-Punkte bleiben auf dem Handy und werden dort nach Tagesende gelöscht. Die Kilometer bleiben erhalten.'),
+      h('div', { class: 'row' },
+        h('div', {}, h('label', { for: 'pts-h' }, 'Löschen auf dem Handy nach (Stunden)'), h('select', { id: 'pts-h' }, ...[24, 48, 72].map((v) => h('option', { value: v, selected: Number(s.phone_points_hours) === v }, `${v} Stunden`)))),
+        h('div', {}, h('label', { for: 'route-d' }, 'Weg auf dem Server (Variante B)'), h('select', { id: 'route-d' }, h('option', { value: 0, selected: !(s.server_route_days > 0) }, 'aus (empfohlen)'), ...[7, 10, 14].map((v) => h('option', { value: v, selected: Number(s.server_route_days) === v }, `${v} Tage behalten`)))),
+      ),
+      h('label', { class: 'check' },
+        h('input', {
+          type: 'checkbox',
+          checked: !!me?.gps_test,
+          onchange: async (e) => {
+            try {
+              me = await api(`/users/${me.id}`, { method: 'PATCH', body: { gps_test: e.target.checked } });
+            } catch (err) {
+              e.target.checked = !e.target.checked;
+              alert(err.message);
+            }
+          },
+        }),
+        ' Testmodus mit Karte: Mein eigenes Handy schickt den Weg an den Server (nur für den Chef).',
+      ),
     ),
     h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, 'Speichern')),
     status,

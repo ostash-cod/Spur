@@ -4,7 +4,7 @@ const fs = require('node:fs');
 let srv;
 (async () => {
   fs.rmSync('/tmp/spur-e2e4', { recursive: true, force: true });
-  srv = spawn('node', ['--no-warnings', '/home/claude/spur/server/src/index.js'], { env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e4', PORT: '3115' }, stdio: 'ignore' });
+  srv = spawn('node', ['--no-warnings', require('node:path').join(__dirname, '..', 'server', 'src', 'index.js')], { env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e4', PORT: '3115' }, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1500));
   const code = fs.readFileSync('/tmp/spur-e2e4/erster-zugang.txt', 'utf8').match(/: ([A-Z0-9-]+)/)[1];
   const browser = await chromium.launch();

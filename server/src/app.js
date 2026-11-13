@@ -11,7 +11,7 @@ import { registerReceiptRoutes } from './receipts.js';
 import { registerPayrollRoutes } from './payroll.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites } from './db.js';
+import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites, mayUploadPoints } from './db.js';
 import {
   candidateHashes,
   createUser,
@@ -45,6 +45,14 @@ const VALIDATORS = {
   unknown_place_minutes: positiveNumber('Minuten für unbekannte Orte'),
   km_rate_customer: positiveNumber('Kilometersatz Kunde'),
   km_rate_employee: positiveNumber('Kilometergeld Mitarbeiter'),
+  phone_points_hours(v) {
+    if (!Number.isInteger(v) || v < 24 || v > 168) throw new Error('Löschfrist auf dem Handy: 24 bis 168 Stunden');
+    return v;
+  },
+  server_route_days(v) {
+    if (!Number.isInteger(v) || (v !== 0 && (v < 7 || v > 14))) throw new Error('Weg auf dem Server: 0 (aus) oder 7 bis 14 Tage');
+    return v;
+  },
   break_rules(v) {
     if (!Array.isArray(v) || v.length === 0) throw new Error('Pausenregel fehlt');
     const rules = v.map((r) => {
@@ -145,7 +153,12 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     return { ok: true };
   });
 
-  app.get('/api/me', { preHandler: requireUser }, async (req) => publicUser(req.user));
+  // upload_points: ob das Handy rohe GPS-Punkte schicken soll (Variante C: nein, außer Testmodus oder Variante B).
+  app.get('/api/me', { preHandler: requireUser }, async (req) => ({
+    ...publicUser(req.user),
+    upload_points: mayUploadPoints(db, req.user),
+    points_hours: Number(getSettings(db).phone_points_hours) || 48,
+  }));
 
   // --- Mitarbeiter (nur Chef) ---
   app.get('/api/users', { preHandler: requireAdmin }, async () =>
@@ -177,7 +190,11 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       active: b.active === undefined ? row.active : b.active ? 1 : 0,
       can_receipts: b.can_receipts === undefined ? row.can_receipts : b.can_receipts ? 1 : 0,
       home_km: b.home_km === undefined ? row.home_km : b.home_km === null || b.home_km === '' ? null : Number(b.home_km),
+      gps_test: b.gps_test === undefined ? row.gps_test : b.gps_test ? 1 : 0,
     };
+    if (next.gps_test && row.role !== 'admin') {
+      return reply.code(400).send({ error: 'Der Testmodus mit Karte ist nur für den Chef' });
+    }
     if (next.home_km !== null && next.home_km !== undefined && !(next.home_km >= 0 && next.home_km <= 500)) {
       return reply.code(400).send({ error: 'Kilometer müssen zwischen 0 und 500 liegen' });
     }
@@ -187,13 +204,14 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     if (id === req.user.id && !next.active) {
       return reply.code(400).send({ error: 'Du kannst dich nicht selbst deaktivieren' });
     }
-    db.prepare('UPDATE users SET name = ?, language = ?, uses_private_car = ?, active = ?, can_receipts = ?, home_km = ? WHERE id = ?').run(
+    db.prepare('UPDATE users SET name = ?, language = ?, uses_private_car = ?, active = ?, can_receipts = ?, home_km = ?, gps_test = ? WHERE id = ?').run(
       next.name,
       next.language,
       next.uses_private_car,
       next.active,
       next.can_receipts,
       next.home_km ?? null,
+      next.gps_test,
       id,
     );
     if (!next.active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
@@ -286,6 +304,9 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
         return reply.code(400).send({ error: 'Ungültiger Punkt' });
       }
     }
+    // Variante C: Der Server speichert keine rohen Punkte. Ältere Apps bekommen trotzdem eine Erfolgsmeldung,
+    // damit sie die Punkte als erledigt markieren und der Abgleich der Abschnitte nicht hängen bleibt.
+    if (!mayUploadPoints(db, req.user)) return { added: 0, dropped: points.length };
     const insert = db.prepare('INSERT OR IGNORE INTO points (day_id, ts, lat, lng, acc) VALUES (?, ?, ?, ?, ?)');
     let added = 0;
     db.exec('BEGIN');

@@ -1,6 +1,6 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb } from '../src/db.js';
+import { openDb, setSetting, purgeRoutePoints } from '../src/db.js';
 import { createUser } from '../src/auth.js';
 import { buildApp } from '../src/app.js';
 
@@ -210,6 +210,18 @@ test('Tag anlegen ist wiederholbar und aktualisiert das Ende', async () => {
   assert.equal(again.json().id, first.json().id);
 
   const pts = [0, 15, 30].map((s, i) => ({ ts: t0 + s * 1000, lat: 47.96 + i * 0.001, lng: 11.3, acc: 8 }));
+  // Variante C: Ohne Testmodus und ohne Variante B nimmt der Server keine Punkte an, meldet aber Erfolg.
+  const dropped = await app2.inject({ method: 'POST', url: `/api/days/${first.json().id}/points`, headers: auth(wt), payload: { points: pts } });
+  assert.equal(dropped.statusCode, 200);
+  assert.deepEqual(dropped.json(), { added: 0, dropped: 3 });
+  assert.equal(db2.prepare('SELECT COUNT(*) AS n FROM points').get().n, 0, 'keine Rohpunkte auf dem Server');
+  const me = (await app2.inject({ url: '/api/me', headers: auth(wt) })).json();
+  assert.equal(me.upload_points, false);
+  assert.equal(me.points_hours, 48);
+
+  // Variante B eingeschaltet: Punkte werden gespeichert.
+  setSetting(db2, 'server_route_days', 7);
+  assert.equal((await app2.inject({ url: '/api/me', headers: auth(wt) })).json().upload_points, true);
   const add = await app2.inject({ method: 'POST', url: `/api/days/${first.json().id}/points`, headers: auth(wt), payload: { points: pts } });
   assert.equal(add.json().added, 3);
   const dup = await app2.inject({ method: 'POST', url: `/api/days/${first.json().id}/points`, headers: auth(wt), payload: { points: pts } });
@@ -223,6 +235,43 @@ test('Tag anlegen ist wiederholbar und aktualisiert das Ende', async () => {
   assert.equal(list.json()[0].points.length, 3);
 
   assert.equal((await app2.inject({ url: q, headers: auth(wt) })).statusCode, 403, 'Mitarbeiter sehen keine Tagesliste');
+});
+
+test('Variante C: Testmodus nur für den Chef, Variante B löscht nur neue Punkte nach Frist', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Mitarbeiter' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+
+  const forWorker = await app2.inject({ method: 'PATCH', url: `/api/users/${w.id}`, headers: auth(at), payload: { gps_test: true } });
+  assert.equal(forWorker.statusCode, 400, 'kein Testmodus für Mitarbeiter');
+  const forChef = await app2.inject({ method: 'PATCH', url: `/api/users/${a.id}`, headers: auth(at), payload: { gps_test: true } });
+  assert.equal(forChef.json().gps_test, true);
+  assert.equal((await app2.inject({ url: '/api/me', headers: auth(at) })).json().upload_points, true);
+  assert.equal((await app2.inject({ url: '/api/me', headers: auth(wt) })).json().upload_points, false);
+
+  for (const [body, ok] of [[{ server_route_days: 3 }, false], [{ server_route_days: 0 }, true], [{ server_route_days: 10 }, true], [{ phone_points_hours: 12 }, false], [{ phone_points_hours: 48 }, true]]) {
+    const r = await app2.inject({ method: 'PUT', url: '/api/settings', headers: auth(at), payload: body });
+    assert.equal(r.statusCode, ok ? 200 : 400, JSON.stringify(body));
+  }
+
+  // Löschen: alte Punkte (vor Variante C) bleiben, Testmodus-Punkte des Chefs bleiben, neue Mitarbeiter-Punkte nach 10 Tagen weg.
+  const now = Date.now();
+  setSetting(db2, 'points_policy_since', now - 30 * 86_400_000);
+  const day = (uid, cid) => db2.prepare('INSERT INTO days (user_id, client_id, started_at) VALUES (?, ?, ?)').run(uid, cid, now).lastInsertRowid;
+  const wd = day(w.id, 'w-12345678'), ad = day(a.id, 'a-12345678');
+  const pt = db2.prepare('INSERT INTO points (day_id, ts, lat, lng) VALUES (?, ?, 47, 11)');
+  pt.run(wd, now - 40 * 86_400_000); // vor Variante C
+  pt.run(wd, now - 20 * 86_400_000); // zu alt
+  pt.run(wd, now - 2 * 86_400_000); // noch in der Frist
+  pt.run(ad, now - 20 * 86_400_000); // Testmodus Chef
+  assert.equal(purgeRoutePoints(db2, now), 1);
+  assert.equal(db2.prepare('SELECT COUNT(*) AS n FROM points').get().n, 3);
+  setSetting(db2, 'server_route_days', 0);
+  pt.run(wd, now - 20 * 86_400_000 + 1);
+  assert.equal(purgeRoutePoints(db2, now), 0, 'Variante B aus: nichts wird gelöscht');
 });
 
 test('Punkte nur für eigene Tage und nur gültige Werte', async () => {

@@ -74,7 +74,7 @@ data class SegmentRow(
  * Lokale Datenbank: Alles wird zuerst hier gespeichert und später mit dem Server abgeglichen,
  * damit auch ohne Internet nichts verloren geht.
  */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 11) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", null, 12) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -103,6 +103,9 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     }
 
     private fun createSheetTables(db: SQLiteDatabase) {
+        // Variante C: gefahrene Meter pro Zeitpunkt, ohne Ort. Bleibt, wenn die GPS-Punkte gelöscht sind,
+        // damit die Kilometer einer Fahrt weiter berechnet werden können.
+        db.execSQL("CREATE TABLE IF NOT EXISTS route_dist (day_id INTEGER NOT NULL, ts INTEGER NOT NULL, meters REAL NOT NULL, PRIMARY KEY (day_id, ts))")
         db.execSQL("CREATE TABLE IF NOT EXISTS trip_marks (day_id INTEGER NOT NULL, start_ts INTEGER NOT NULL, vehicle TEXT NOT NULL, km REAL, PRIMARY KEY (day_id, start_ts))")
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS receipts (
@@ -462,6 +465,52 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     fun pointsSince(dayId: Long, fromTs: Long): List<PointRow> =
         readableDatabase.rawQuery("SELECT id, ts, lat, lng, acc FROM points WHERE day_id = ? AND ts >= ? ORDER BY ts", arrayOf(dayId.toString(), fromTs.toString()))
             .use { c -> buildList { while (c.moveToNext()) add(PointRow(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4))) } }
+
+    /**
+     * Variante C: Löscht die GPS-Punkte aller Tage, die vor [endedBefore] beendet wurden.
+     * Vorher werden die gefahrenen Meter (ohne Ort) gesichert, damit die Kilometer erhalten bleiben.
+     * Mit [onlySynced] bleiben Punkte, die noch an den Server sollen (Testmodus ohne Internet).
+     * Gibt die Zahl der gelöschten Punkte zurück.
+     */
+    @Synchronized
+    fun purgePoints(endedBefore: Long, onlySynced: Boolean): Int {
+        val days = readableDatabase.rawQuery(
+            "SELECT DISTINCT d.id FROM days d JOIN points p ON p.day_id = d.id WHERE d.ended_at IS NOT NULL AND d.ended_at < ?",
+            arrayOf(endedBefore.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
+        var removed = 0
+        val w = writableDatabase
+        for (dayId in days) {
+            if (onlySynced) {
+                val open = w.rawQuery("SELECT COUNT(*) FROM points WHERE day_id = ? AND synced = 0", arrayOf(dayId.toString())).use { it.moveToFirst(); it.getInt(0) }
+                if (open > 0) continue
+            }
+            val points = pointsSince(dayId, 0L)
+            w.beginTransaction()
+            try {
+                for ((ts, m) in cumulativeMeters(points)) {
+                    w.execSQL("INSERT OR REPLACE INTO route_dist (day_id, ts, meters) VALUES (?, ?, ?)", arrayOf<Any>(dayId, ts, m))
+                }
+                removed += w.delete("points", "day_id = ?", arrayOf(dayId.toString()))
+                w.setTransactionSuccessful()
+            } finally {
+                w.endTransaction()
+            }
+        }
+        return removed
+    }
+
+    /** Gefahrene Kilometer zwischen [from] und [to] aus den gesicherten Metern, null wenn nichts gesichert ist. */
+    fun savedRouteKm(dayId: Long, from: Long, to: Long): Double? {
+        val rows = readableDatabase.rawQuery(
+            "SELECT meters FROM route_dist WHERE day_id = ? AND ts >= ? AND ts <= ? ORDER BY ts",
+            arrayOf(dayId.toString(), from.toString(), to.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getDouble(0)) } }
+        val any = readableDatabase.rawQuery("SELECT 1 FROM route_dist WHERE day_id = ? LIMIT 1", arrayOf(dayId.toString())).use { it.moveToFirst() }
+        if (!any) return null
+        if (rows.size < 2) return 0.0
+        return (rows.last() - rows.first()) / 1000.0
+    }
 
     fun lastPoint(): PointRow? =
         readableDatabase.rawQuery("SELECT id, ts, lat, lng, acc FROM points ORDER BY ts DESC LIMIT 1", null)

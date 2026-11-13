@@ -1,7 +1,7 @@
 import { writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { openDb } from './db.js';
+import { openDb, purgeRoutePoints } from './db.js';
 import { createUser } from './auth.js';
 import { buildApp } from './app.js';
 
@@ -31,3 +31,15 @@ const app = await buildApp({
   logger: { level: 'info', redact: ['req.headers.authorization'] },
 });
 await app.listen({ port, host });
+
+// Variante B (nur wenn eingeschaltet): alte Wege stündlich löschen.
+const purge = () => {
+  try {
+    const n = purgeRoutePoints(db);
+    if (n > 0) app.log.info(`Variante B: ${n} alte GPS-Punkte gelöscht`);
+  } catch (err) {
+    app.log.error(err);
+  }
+};
+purge();
+setInterval(purge, 60 * 60 * 1000).unref();

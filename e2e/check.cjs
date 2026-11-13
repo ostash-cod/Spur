@@ -5,7 +5,7 @@ const fs = require('node:fs');
 let srv;
 (async () => {
   fs.rmSync('/tmp/spur-e2e', { recursive: true, force: true });
-  srv = spawn('node', ['--no-warnings', '/home/claude/spur/server/src/index.js'], {
+  srv = spawn('node', ['--no-warnings', require('node:path').join(__dirname, '..', 'server', 'src', 'index.js')], {
     env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e', PORT: '3111' }, stdio: 'ignore',
   });
   await new Promise((r) => setTimeout(r, 1500));

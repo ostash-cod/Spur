@@ -61,6 +61,22 @@ fun routeKm(points: List<PointRow>, from: Long, to: Long): Double {
     return m / 1000.0
 }
 
+/**
+ * Gefahrene Meter bis zu jedem genauen Punkt, nach derselben Regel wie [routeKm].
+ * Der Unterschied zweier Werte ergibt genau die Strecke dazwischen, ohne dass ein Ort gespeichert bleibt.
+ */
+fun cumulativeMeters(points: List<PointRow>): List<Pair<Long, Double>> {
+    val p = points.filter { it.acc <= 60f }.sortedBy { it.ts }
+    var m = 0.0
+    return p.mapIndexed { i, x ->
+        if (i > 0) {
+            val d = distanceMeters(p[i - 1].lat, p[i - 1].lng, x.lat, x.lng)
+            if (d >= 15.0) m += d
+        }
+        x.ts to m
+    }
+}
+
 /** Eine Zeile des Tageszettels. */
 class SheetLine(val kind: String, val label: String, val siteId: Long?, from: Long, to: Long, val autoKm: Double?) {
     var from by mutableLongStateOf(from)
@@ -137,7 +153,8 @@ fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixe
     return blocks.mapIndexed { idx, b ->
         val travel = b.isTravel
         val kind = if (travel) "travel" else b.kind
-        val auto = if (travel) routeKm(points, b.start, b.end) else null
+        // Variante C: Sind die Punkte schon gelöscht, gelten die gesicherten Meter.
+        val auto = if (travel) (if (points.isNotEmpty()) routeKm(points, b.start, b.end) else db.savedRouteKm(day.id, b.start, b.end)) else null
         SheetLine(kind, b.label + (b.stripeText?.let { " ($it)" } ?: ""), b.siteId, b.start, b.end, auto).also { l ->
             if (travel) {
                 val mark = db.tripMark(day.id, b.start)

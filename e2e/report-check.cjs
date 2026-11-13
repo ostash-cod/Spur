@@ -6,7 +6,7 @@ let srv;
 const ok = (cond, msg) => { console.log(cond ? 'OK  ' : 'FEHLER', msg); if (!cond) process.exitCode = 1; };
 (async () => {
   fs.rmSync('/tmp/spur-e2e5', { recursive: true, force: true });
-  srv = spawn('node', ['--no-warnings', '/home/claude/spur/server/src/index.js'], { env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e5', PORT: '3116' }, stdio: 'ignore' });
+  srv = spawn('node', ['--no-warnings', require('node:path').join(__dirname, '..', 'server', 'src', 'index.js')], { env: { ...process.env, SPUR_DATA_DIR: '/tmp/spur-e2e5', PORT: '3116' }, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 1500));
   const base = 'http://127.0.0.1:3116';
   const code = fs.readFileSync('/tmp/spur-e2e5/erster-zugang.txt', 'utf8').match(/: ([A-Z0-9-]+)/)[1];
