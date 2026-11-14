@@ -440,7 +440,7 @@ fun MainScreen() {
                     onStopChange = { changeStop = it },
                   )
                 }
-                1 -> PlaceholderScreen("Berichte", "Wochen- und Monatsnachweis kommen im nächsten Schritt.")
+                1 -> ReportsScreen(now, sites.associateBy { it.id })
                 else -> SettingsScreen()
             }
         }
@@ -691,23 +691,6 @@ fun TodayScreen(
             colors = ButtonDefaults.buttonColors(containerColor = if (running) Rot else Gruen, contentColor = Color.White),
             modifier = Modifier.fillMaxWidth().height(110.dp),
         ) { Text(if (running) "Tag beenden" else "Tag starten", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold) }
-        if (!running) {
-            var freeToday by remember { mutableStateOf(Prefs.reminderFreeDate(ctx) == LocalDate.now()) }
-            OutlinedButton(
-                onClick = {
-                    if (freeToday) {
-                        Prefs.setReminderFreeDate(ctx, null)
-                    } else {
-                        Reminder.cancelNotification(ctx)
-                        Prefs.setReminderSnoozeUntil(ctx, 0L)
-                        Prefs.setReminderFreeDate(ctx, LocalDate.now())
-                    }
-                    freeToday = !freeToday
-                    Reminder.schedule(ctx)
-                },
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-            ) { Text(if (freeToday) "Heute frei – wieder erinnern" else "Heute frei (keine Erinnerung)") }
-        }
 
         var noteDialog by remember { mutableStateOf<Triple<LocalDate, Long?, String>?>(null) }
         var notesVersion by remember { mutableIntStateOf(0) }
@@ -726,7 +709,6 @@ fun TodayScreen(
             val today = Db.get(ctx).daysOnDate(d0, d0 + 86_400_000L).lastOrNull()
             if (today != null) SheetButton(today, now, sites.associateBy { it.id })
         }
-        WeekSubmitButton(now, sites.associateBy { it.id })
         NotesList(LocalDate.now(), sites.associateBy { it.id }, notesVersion) { n -> noteDialog = Triple(LocalDate.now(), n.siteId, n.kind) }
         noteDialog?.let { (d, sid, kd) ->
             NoteDialog(d, sid, sites.associateBy { it.id }, kd, onDismiss = { noteDialog = null; notesVersion++ })
@@ -1464,6 +1446,16 @@ fun SettingsScreen() {
     }
 }
 
+/** Berichte: hier gibt der Mitarbeiter die Woche ab (spätestens am Ende der Woche, Montag kommt eine Erinnerung). */
+@Composable
+fun ReportsScreen(now: Long, siteMap: Map<Long, SiteRow>) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Woche abgeben", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Text("Am Ende der Woche schickst du hier alle Zettel von Montag bis heute an den Chef. Einzelne Tage kannst du schon vorher auf dem Heute-Bildschirm abgeben.")
+        WeekSubmitButton(now, siteMap)
+    }
+}
+
 /** Einstellungen der Erinnerung zum Tagesbeginn: Wochentage, zwei Uhrzeiten, Ton und Vibration. */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -1484,6 +1476,21 @@ fun ReminderSection() {
         Text("Vor Arbeitsbeginn erinnern, wenn der Tag noch nicht läuft", Modifier.weight(1f))
         Switch(checked = cfg.enabled, onCheckedChange = { change(cfg.copy(enabled = it)) })
     }
+    var freeToday by remember { mutableStateOf(Prefs.reminderFreeDate(ctx) == LocalDate.now()) }
+    OutlinedButton(
+        onClick = {
+            if (freeToday) {
+                Prefs.setReminderFreeDate(ctx, null)
+            } else {
+                Reminder.cancelNotification(ctx)
+                Prefs.setReminderSnoozeUntil(ctx, 0L)
+                Prefs.setReminderFreeDate(ctx, LocalDate.now())
+            }
+            freeToday = !freeToday
+            Reminder.schedule(ctx)
+        },
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+    ) { Text(if (freeToday) "Heute frei – wieder erinnern" else "Heute frei (keine Erinnerung)") }
     if (cfg.enabled) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Text("An gesetzlichen Feiertagen nicht erinnern", Modifier.weight(1f))

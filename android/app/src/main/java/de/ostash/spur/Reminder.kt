@@ -126,6 +126,7 @@ object Reminder {
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setContentTitle("Spur: Tag starten?")
             .setContentText("Dein Arbeitstag läuft noch nicht.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText("Dein Arbeitstag läuft noch nicht. Tag starten, heute frei oder später erinnern?"))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setContentIntent(open)

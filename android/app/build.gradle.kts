@@ -12,8 +12,8 @@ android {
         applicationId = "de.ostash.spur"
         minSdk = 26
         targetSdk = 35
-        versionCode = 37
-        versionName = "0.9.12"
+        versionCode = 38
+        versionName = "0.9.13"
     }
 
     buildTypes {
