@@ -122,11 +122,14 @@ object Reminder {
         val open = PendingIntent.getActivity(
             ctx, 2, Intent(ctx, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val weekOpen = runCatching { lastWeekOpen(Db.get(ctx)) }.getOrDefault(false)
+        val bigText = "Dein Arbeitstag läuft noch nicht. Tag starten, heute frei oder später erinnern?" +
+            if (weekOpen) "\nDie letzte Woche ist noch nicht abgegeben (Berichte)." else ""
         val n = NotificationCompat.Builder(ctx, channelFor(ctx, cfg))
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setContentTitle("Spur: Tag starten?")
-            .setContentText("Dein Arbeitstag läuft noch nicht.")
-            .setStyle(NotificationCompat.BigTextStyle().bigText("Dein Arbeitstag läuft noch nicht. Tag starten, heute frei oder später erinnern?"))
+            .setContentText(if (weekOpen) "Tag noch nicht gestartet. Letzte Woche ist noch offen." else "Dein Arbeitstag läuft noch nicht.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setContentIntent(open)

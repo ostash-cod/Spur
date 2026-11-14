@@ -162,6 +162,16 @@ fun weekStartOf(date: java.time.LocalDate): String = date.minusDays((date.dayOfW
 fun isDayLocked(db: Db, date: java.time.LocalDate): Boolean =
     date.isBefore(java.time.LocalDate.now().minusDays(7)) || db.isWeekClosed(weekStartOf(date))
 
+/** Letzte Woche hatte Arbeitstage und wurde noch nicht abgegeben (für den Hinweis in der Morgen-Erinnerung). */
+fun lastWeekOpen(db: Db, today: java.time.LocalDate = java.time.LocalDate.now()): Boolean {
+    val monday = java.time.LocalDate.parse(weekStartOf(today.minusDays(7)))
+    if (db.isWeekClosed(monday.toString())) return false
+    val zone = ZoneId.systemDefault()
+    val from = monday.atStartOfDay(zone).toInstant().toEpochMilli()
+    val to = monday.plusDays(7).atStartOfDay(zone).toInstant().toEpochMilli()
+    return db.daysOnDate(from, to).isNotEmpty()
+}
+
 /** Zettel aus dem gespeicherten Stand (Fahrzeug, Kilometer, Pause) zusammenstellen und zum Senden vormerken. */
 fun queueSheetFor(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixedKm: Double = 0.0) {
     val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
@@ -263,7 +273,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
                 queueSheetJson(db, day, start, end, pauseMin, lines)
                 SyncWorker.enqueue(ctx)
                 onDismiss()
-            }) { Text("Abgeben") }
+            }) { Text("Stimmt – abgeben") }
         },
         dismissButton = {
             Row {
