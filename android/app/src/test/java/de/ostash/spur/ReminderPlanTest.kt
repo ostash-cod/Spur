@@ -82,3 +82,31 @@ class ReminderPlanTest {
         assertEquals(LocalDate.parse("2026-10-25"), n.toLocalDate())
     }
 }
+
+class HolidaysTest {
+    private val zone = ZoneId.of("Europe/Berlin")
+    private fun d(s: String) = LocalDate.parse(s)
+
+    @Test
+    fun ostern() {
+        assertEquals(d("2026-04-05"), Holidays.easter(2026))
+        assertEquals(d("2027-03-28"), Holidays.easter(2027))
+    }
+
+    @Test
+    fun bayerischeFeiertage2026() {
+        listOf("2026-01-01", "2026-01-06", "2026-04-03", "2026-04-06", "2026-05-01", "2026-05-14",
+            "2026-05-25", "2026-06-04", "2026-08-15", "2026-10-03", "2026-11-01", "2026-12-25", "2026-12-26")
+            .forEach { assertTrue(it, Holidays.isHoliday(d(it))) }
+        assertTrue(!Holidays.isHoliday(d("2026-11-06")))
+    }
+
+    @Test
+    fun feiertagWirdUebersprungen() {
+        // Freitag 2027-01-01 (Neujahr): nächste Erinnerung ist Montag 04.01.
+        val after = ZonedDateTime.of(d("2026-12-31"), LocalTime.of(12, 0), zone)
+        assertEquals(ZonedDateTime.of(d("2027-01-04"), LocalTime.of(6, 55), zone), ReminderPlan.next(after, ReminderConfig(), null))
+        // Mit ausgeschalteter Option wird auch am Feiertag erinnert.
+        assertEquals(ZonedDateTime.of(d("2027-01-01"), LocalTime.of(6, 55), zone), ReminderPlan.next(after, ReminderConfig(skipHolidays = false), null))
+    }
+}

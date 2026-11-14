@@ -691,6 +691,23 @@ fun TodayScreen(
             colors = ButtonDefaults.buttonColors(containerColor = if (running) Rot else Gruen, contentColor = Color.White),
             modifier = Modifier.fillMaxWidth().height(110.dp),
         ) { Text(if (running) "Tag beenden" else "Tag starten", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold) }
+        if (!running) {
+            var freeToday by remember { mutableStateOf(Prefs.reminderFreeDate(ctx) == LocalDate.now()) }
+            OutlinedButton(
+                onClick = {
+                    if (freeToday) {
+                        Prefs.setReminderFreeDate(ctx, null)
+                    } else {
+                        Reminder.cancelNotification(ctx)
+                        Prefs.setReminderSnoozeUntil(ctx, 0L)
+                        Prefs.setReminderFreeDate(ctx, LocalDate.now())
+                    }
+                    freeToday = !freeToday
+                    Reminder.schedule(ctx)
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+            ) { Text(if (freeToday) "Heute frei – wieder erinnern" else "Heute frei (keine Erinnerung)") }
+        }
 
         var noteDialog by remember { mutableStateOf<Triple<LocalDate, Long?, String>?>(null) }
         var notesVersion by remember { mutableIntStateOf(0) }
@@ -1468,6 +1485,10 @@ fun ReminderSection() {
         Switch(checked = cfg.enabled, onCheckedChange = { change(cfg.copy(enabled = it)) })
     }
     if (cfg.enabled) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("An gesetzlichen Feiertagen nicht erinnern", Modifier.weight(1f))
+            Switch(checked = cfg.skipHolidays, onCheckedChange = { change(cfg.copy(skipHolidays = it)) })
+        }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DayOfWeek.values().forEach { d ->
                 FilterChip(

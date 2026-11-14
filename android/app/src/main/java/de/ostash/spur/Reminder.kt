@@ -26,6 +26,8 @@ data class ReminderConfig(
     val second: LocalTime = LocalTime.of(7, 0),
     val sound: Boolean = true,
     val vibrate: Boolean = true,
+    /** An gesetzlichen Feiertagen (Bayern) nicht erinnern. */
+    val skipHolidays: Boolean = true,
 )
 
 /** Reine Rechenlogik (ohne Android), damit sie sich testen lässt. */
@@ -55,7 +57,7 @@ object ReminderPlan {
         if (!cfg.enabled || cfg.days.isEmpty()) return null
         var date = after.toLocalDate()
         repeat(9) {
-            if (date.dayOfWeek in cfg.days && date != freeDate) {
+            if (date.dayOfWeek in cfg.days && date != freeDate && !(cfg.skipHolidays && Holidays.isHoliday(date))) {
                 slots(date, cfg, after.zone).firstOrNull { it.isAfter(after) }?.let { return it }
             }
             date = date.plusDays(1)
@@ -154,7 +156,8 @@ class ReminderReceiver : BroadcastReceiver() {
         when (intent.action) {
             Reminder.ACTION_FIRE -> {
                 val running = runCatching { Db.get(ctx).openDay() != null }.getOrDefault(false)
-                if (Prefs.token(ctx) != null && !running) Reminder.show(ctx) else Reminder.cancelNotification(ctx)
+                val holiday = Prefs.reminder(ctx).skipHolidays && Holidays.isHoliday(LocalDate.now())
+                if (Prefs.token(ctx) != null && !running && !holiday) Reminder.show(ctx) else Reminder.cancelNotification(ctx)
                 Prefs.setReminderSnoozeUntil(ctx, 0L)
                 Reminder.schedule(ctx)
             }

@@ -56,6 +56,7 @@ object Prefs {
             second = time("rem_second", d.second),
             sound = p.getBoolean("rem_sound", d.sound),
             vibrate = p.getBoolean("rem_vibrate", d.vibrate),
+            skipHolidays = p.getBoolean("rem_holidays", d.skipHolidays),
         )
     }
 
@@ -67,6 +68,7 @@ object Prefs {
             .putInt("rem_second", r.second.hour * 60 + r.second.minute)
             .putBoolean("rem_sound", r.sound)
             .putBoolean("rem_vibrate", r.vibrate)
+            .putBoolean("rem_holidays", r.skipHolidays)
             .apply()
     }
 
