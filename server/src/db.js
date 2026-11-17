@@ -213,6 +213,13 @@ export function openDb(path = ':memory:') {
       if (col === 'note') splitOldAddresses(db);
     }
   }
+  // Schritt 3: Chef ändert, teilt und löscht Abschnitte. Gelöscht wird nur ausgeblendet (deleted_at).
+  // chef_edited = 1: Das Handy darf den Abschnitt (oder Tag) nicht mehr überschreiben – die Änderung des Chefs gewinnt.
+  if (!hasColumn('segments', 'deleted_at')) db.exec('ALTER TABLE segments ADD COLUMN deleted_at INTEGER');
+  if (!hasColumn('segments', 'chef_edited')) db.exec('ALTER TABLE segments ADD COLUMN chef_edited INTEGER NOT NULL DEFAULT 0');
+  if (!hasColumn('segments', 'created_at')) db.exec('ALTER TABLE segments ADD COLUMN created_at INTEGER');
+  if (!hasColumn('segments', 'updated_at')) db.exec('ALTER TABLE segments ADD COLUMN updated_at INTEGER');
+  if (!hasColumn('days', 'chef_edited')) db.exec('ALTER TABLE days ADD COLUMN chef_edited INTEGER NOT NULL DEFAULT 0');
   // Testmodus mit Karte: nur für den Chef, nur als Schalter. Dann schickt sein Handy den Weg an den Server.
   if (!hasColumn('users', 'gps_test')) db.exec('ALTER TABLE users ADD COLUMN gps_test INTEGER NOT NULL DEFAULT 0');
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');

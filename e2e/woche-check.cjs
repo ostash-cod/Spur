@@ -70,16 +70,71 @@ let srv;
   console.log('Woche:', (await page.innerText('.wsum')).replace(/\s+/g, ' '));
   await page.screenshot({ path: `${DATA}/woche.png` });
 
-  // Block anklicken, Notiz ändern
+  // Block anklicken: kleines Fenster mit Notiz, Fotos und Knöpfen
+  page.on('dialog', (dl) => dl.accept());
   await page.locator('.wblock', { hasText: 'Leibungen bearbeitet' }).click();
-  await page.waitForSelector('dialog textarea');
-  console.log('Fenster:', (await page.innerText('dialog')).split('\n').slice(0, 4).join(' | '));
+  await page.waitForSelector('dialog button:has-text("Bearbeiten")');
   await page.waitForSelector('dialog img[src^="blob:"]');
+  console.log('Fenster:', (await page.innerText('dialog')).split('\n').filter(Boolean).slice(0, 5).join(' | '));
   await page.screenshot({ path: `${DATA}/fenster.png` });
-  await page.fill('dialog textarea', 'Wand im Schlafzimmer vorbehandelt und aufgeräumt.');
-  await page.click('dialog button:has-text("Notiz speichern")');
+
+  // Bearbeiten: Ende 12:00 -> 11:30, Beschreibung ändern
+  await page.click('dialog button:has-text("Bearbeiten")');
+  await page.waitForSelector('#e-start');
+  if (await page.inputValue('#e-start') !== '07:40' || await page.inputValue('#e-end') !== '12:00') throw new Error('Zeiten nicht vorausgefüllt');
+  await page.fill('#e-end', '11:30');
+  await page.fill('#e-desc', 'Wand im Schlafzimmer vorbehandelt und aufgeräumt.');
+  console.log('Bearbeiten:', (await page.textContent('#e-dur')), '|', (await page.innerText('dialog')).match(/Erstellt:[^\n]*/)[0]);
+  await page.screenshot({ path: `${DATA}/bearbeiten.png` });
+  await page.click('dialog button:has-text("Speichern")');
   await page.waitForSelector('.wblock .wnote:has-text("aufgeräumt")');
-  console.log('Notiz geändert: ok');
+  const monFoot = (await page.locator('.wfootday').first().innerText()).replace(/\s+/g, ' ');
+  console.log('Montag nach Änderung:', monFoot);
+  if (!monFoot.includes('401,00 €')) throw new Error('Betrag nach Änderung falsch (erwartet 6:41 h x 60 = 401,00 €): ' + monFoot);
+
+  // Fehler: Überschneidung
+  await page.locator('.wblock', { hasText: 'aufgeräumt' }).click();
+  await page.click('dialog button:has-text("Bearbeiten")');
+  await page.fill('#e-end', '13:00');
+  await page.click('dialog button:has-text("Speichern")');
+  await page.waitForFunction(() => document.querySelector('dialog .error').textContent.includes('überschneidet'));
+  console.log('Überschneidung:', await page.textContent('dialog .error'));
+  await page.click('dialog button:has-text("Abbrechen")');
+
+  // Teilen: Mittwoch 12:20–16:00 um 14:00
+  const before = await page.locator('.wblock').count();
+  await page.locator('.wcol').nth(2).locator('.wblock', { hasText: '3:40 h' }).click();
+  await page.click('dialog button:has-text("Teilen")');
+  await page.fill('#s-at', '14:00');
+  await page.click('dialog button.primary:has-text("Teilen")');
+  await page.waitForFunction((n) => document.querySelectorAll('.wblock').length === n + 1, before);
+  console.log('Geteilt: Blöcke', before, '->', before + 1);
+
+  // Den zweiten Teil einer anderen Baustelle geben
+  await page.locator('.wcol').nth(2).locator('.wblock', { hasText: '2:00 h' }).click();
+  await page.click('dialog button:has-text("Bearbeiten")');
+  await page.selectOption('#e-site', { label: 'Tobias Krug' });
+  await page.click('dialog button:has-text("Speichern")');
+  await page.waitForFunction(() => [...document.querySelectorAll('.wcol')][2].innerText.split('Tobias Krug').length === 3);
+  console.log('Zweiter Teil jetzt Tobias Krug: ok');
+
+  // Löschen
+  const n2 = await page.locator('.wblock').count();
+  await page.locator('.wcol').nth(2).locator('.wblock', { hasText: '2:00 h' }).click();
+  await page.click('dialog button:has-text("Löschen")');
+  await page.waitForFunction((n) => document.querySelectorAll('.wblock').length < n, n2);
+  const wed = (await page.locator('.wfootday').nth(2).innerText()).replace(/\s+/g, ' ');
+  console.log('Gelöscht, Mittwoch jetzt:', wed);
+  if (!wed.includes('08:00 – 14:00') || !wed.includes('6:00 h')) throw new Error('Tag nach Löschen am Ende nicht gekürzt');
+
+  // Fahrt: Knopf "Fahrt ändern"
+  await page.locator('.wblock', { hasText: 'Anfahrt' }).first().click();
+  await page.waitForSelector('dialog button:has-text("Fahrt ändern")');
+  await page.click('dialog button:has-text("Fahrt ändern")');
+  await page.waitForSelector('dialog h2:has-text("Fahrt ändern")');
+  await page.click('dialog button:has-text("Abbrechen")');
+  console.log('Fahrt ändern: ok');
+  await page.screenshot({ path: `${DATA}/woche-nachher.png` });
 
   // Mitarbeiter wechseln und Woche blättern
   await page.selectOption('.wuser', { label: 'Mykhaylo Yatsyshyn' });

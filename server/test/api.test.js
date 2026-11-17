@@ -372,3 +372,82 @@ test('Besichtigung: Art wird gespeichert, nur der Chef setzt die Abrechnung', as
   assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${id}`, headers: auth(at), payload: { billing: 'bill' } })).statusCode, 200);
   assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${id}`, headers: auth(at), payload: { billing: 'x' } })).statusCode, 400);
 });
+
+test('Schritt 3: Chef ändert, teilt und löscht Abschnitte; Originale bleiben, Handy überschreibt nicht', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Serhii' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+  const H = 3_600_000, t0 = Date.UTC(2026, 10, 10, 6, 0, 0);
+  const site = db2.prepare("INSERT INTO sites (name, color) VALUES ('Lilienstraße', '#2E9E4F')").run().lastInsertRowid;
+  const site2 = db2.prepare("INSERT INTO sites (name, color) VALUES ('Krug', '#D81B60')").run().lastInsertRowid;
+  const day = (await app2.inject({ method: 'POST', url: '/api/days', headers: auth(wt), payload: { client_id: 'tag-12345678', started_at: t0, ended_at: t0 + 9 * H } })).json();
+  const segs = [
+    { client_id: 'seg-a-12345678', site_id: Number(site), kind: 'work', started_at: t0 + H, ended_at: t0 + 5 * H },
+    { client_id: 'seg-b-12345678', site_id: Number(site), kind: 'work', started_at: t0 + 6 * H, ended_at: t0 + 8 * H },
+  ];
+  await app2.inject({ method: 'POST', url: `/api/days/${day.id}/segments`, headers: auth(wt), payload: { segments: segs } });
+  const list = async () => (await app2.inject({ url: `/api/days?user_id=${w.id}&from=${t0 - H}&to=${t0 + 24 * H}`, headers: auth(at) })).json()[0];
+  let d = await list();
+  const [s1, s2] = d.segments;
+  assert.ok(s1.created_at > 0);
+
+  // Nur der Chef
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${s1.id}`, headers: auth(wt), payload: { started_at: t0 } })).statusCode, 403);
+  // Fehler: Ende vor Beginn, Überschneidung, Arbeit ohne Baustelle
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${s1.id}`, headers: auth(at), payload: { ended_at: t0 } })).statusCode, 400);
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${s1.id}`, headers: auth(at), payload: { ended_at: t0 + 7 * H } })).statusCode, 409);
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${s1.id}`, headers: auth(at), payload: { site_id: null } })).statusCode, 400);
+
+  // Ändern: früherer Beginn erweitert den Tag
+  const ok = await app2.inject({ method: 'PATCH', url: `/api/segments/${s1.id}`, headers: auth(at), payload: { started_at: t0 - H / 2, site_id: Number(site2) } });
+  assert.equal(ok.statusCode, 200);
+  d = await list();
+  assert.equal(d.started_at, t0 - H / 2);
+  assert.equal(d.segments[0].site_id, Number(site2));
+
+  // Das Handy schickt den alten Stand noch einmal: Die Änderung des Chefs bleibt.
+  await app2.inject({ method: 'POST', url: `/api/days/${day.id}/segments`, headers: auth(wt), payload: { segments: segs } });
+  await app2.inject({ method: 'POST', url: '/api/days', headers: auth(wt), payload: { client_id: 'tag-12345678', started_at: t0, ended_at: t0 + 9 * H } });
+  d = await list();
+  assert.equal(d.segments[0].site_id, Number(site2), 'Handy überschreibt den Chef nicht');
+  assert.equal(d.started_at, t0 - H / 2);
+
+  // Teilen
+  assert.equal((await app2.inject({ method: 'POST', url: `/api/segments/${s2.id}/split`, headers: auth(at), payload: { at: t0 + 6 * H } })).statusCode, 400);
+  const sp = (await app2.inject({ method: 'POST', url: `/api/segments/${s2.id}/split`, headers: auth(at), payload: { at: t0 + 7 * H } })).json();
+  d = await list();
+  assert.equal(d.segments.length, 3);
+  assert.deepEqual(d.segments.slice(1).map((x) => [x.started_at - t0, x.ended_at - t0]), [[6 * H, 7 * H], [7 * H, 8 * H]]);
+
+  // Löschen: ausgeblendet, aber noch in der Datenbank
+  assert.equal((await app2.inject({ method: 'DELETE', url: `/api/segments/${sp.id}`, headers: auth(at) })).statusCode, 200);
+  d = await list();
+  assert.equal(d.segments.length, 2);
+  assert.ok(db2.prepare('SELECT deleted_at FROM segments WHERE id = ?').get(sp.id).deleted_at > 0);
+  assert.equal((await app2.inject({ method: 'DELETE', url: `/api/segments/${sp.id}`, headers: auth(at) })).statusCode, 404);
+  // Der gelöschte letzte Abschnitt endete nicht am Tagesende (8 h, Tag bis 9 h): Tag bleibt.
+  assert.equal(d.ended_at, t0 + 9 * H);
+  // Letzten Abschnitt am Tagesende löschen: Tag endet früher.
+  const last = (await app2.inject({ method: 'POST', url: `/api/segments/${s2.id}/split`, headers: auth(at), payload: { at: t0 + 6.5 * H } })).json();
+  await app2.inject({ method: 'PATCH', url: `/api/segments/${last.id}`, headers: auth(at), payload: { ended_at: t0 + 9 * H } });
+  await app2.inject({ method: 'DELETE', url: `/api/segments/${last.id}`, headers: auth(at) });
+  d = await list();
+  assert.equal(d.ended_at, t0 + 6.5 * H, 'Tag endet mit dem gelöschten letzten Abschnitt früher');
+
+  // Stille Originale
+  const fields = db2.prepare("SELECT field, old_value FROM change_log WHERE item = 'segment' AND item_id = ? ORDER BY id").all(s1.id).map((r) => r.field);
+  assert.deepEqual(fields, ['started_at', 'site_id']);
+  assert.ok(db2.prepare("SELECT COUNT(*) AS n FROM change_log WHERE item = 'day' AND field = 'ended_at'").get().n >= 1);
+  const hist = (await app2.inject({ url: `/api/segments/${s1.id}/history`, headers: auth(at) })).json();
+  assert.ok(hist.updated_at > 0 && hist.changes === 2);
+
+  // Chef legt eine Notiz für den Mitarbeiter an, Mitarbeiter darf das nicht für andere
+  const n = await app2.inject({ method: 'POST', url: '/api/notes', headers: auth(at), payload: { user_id: w.id, client_id: 'chef-note-1234', date: '2026-11-10', site_id: Number(site2), text: 'Von Chef' } });
+  assert.equal(n.statusCode, 200);
+  assert.equal((await app2.inject({ method: 'POST', url: '/api/notes', headers: auth(wt), payload: { user_id: a.id, client_id: 'x-note-12345', date: '2026-11-10', text: 'x' } })).statusCode, 403);
+  const notes = (await app2.inject({ url: `/api/notes?from=2026-11-10&to=2026-11-10&user_id=${w.id}`, headers: auth(at) })).json();
+  assert.equal(notes[0].text, 'Von Chef');
+});

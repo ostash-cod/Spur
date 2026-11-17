@@ -11,7 +11,7 @@ import { registerReceiptRoutes } from './receipts.js';
 import { registerPayrollRoutes } from './payroll.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites, mayUploadPoints } from './db.js';
+import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites, mayUploadPoints, logChange } from './db.js';
 import {
   candidateHashes,
   createUser,
@@ -286,7 +286,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     }
     db.prepare(
       `INSERT INTO days (user_id, client_id, started_at, ended_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(user_id, client_id) DO UPDATE SET started_at = excluded.started_at, ended_at = excluded.ended_at`,
+       ON CONFLICT(user_id, client_id) DO UPDATE SET started_at = excluded.started_at, ended_at = excluded.ended_at WHERE days.chef_edited = 0`,
     ).run(req.user.id, b.client_id, b.started_at, b.ended_at ?? null);
     const row = db.prepare('SELECT id FROM days WHERE user_id = ? AND client_id = ?').get(req.user.id, b.client_id);
     return { id: row.id };
@@ -339,12 +339,14 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       if (s.site_id != null && !db.prepare('SELECT 1 FROM sites WHERE id = ?').get(Number(s.site_id))) return reply.code(400).send({ error: 'Baustelle nicht gefunden' });
     }
     const upsert = db.prepare(
-      `INSERT INTO segments (day_id, client_id, site_id, kind, started_at, ended_at, source, activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(day_id, client_id) DO UPDATE SET site_id = excluded.site_id, kind = excluded.kind, started_at = excluded.started_at, ended_at = excluded.ended_at, activity = excluded.activity`,
+      `INSERT INTO segments (day_id, client_id, site_id, kind, started_at, ended_at, source, activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(day_id, client_id) DO UPDATE SET site_id = excluded.site_id, kind = excluded.kind, started_at = excluded.started_at, ended_at = excluded.ended_at, activity = excluded.activity, updated_at = excluded.created_at
+       WHERE segments.chef_edited = 0 AND segments.deleted_at IS NULL`,
     );
+    const now = Date.now();
     db.exec('BEGIN');
     try {
-      for (const s of list) upsert.run(day.id, s.client_id, s.site_id ?? null, s.kind ?? 'work', s.started_at, s.ended_at ?? null, s.source === 'auto' ? 'auto' : 'manual', ACTIVITIES.includes(s.activity) ? s.activity : null);
+      for (const s of list) upsert.run(day.id, s.client_id, s.site_id ?? null, s.kind ?? 'work', s.started_at, s.ended_at ?? null, s.source === 'auto' ? 'auto' : 'manual', ACTIVITIES.includes(s.activity) ? s.activity : null, now);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
@@ -353,14 +355,127 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     return { saved: list.length };
   });
 
-  // Chef entscheidet, ob ein Termin (Besichtigung, Aufmaß ...) berechnet wird: 'bill' | 'free' (zeigen, 0 €) | 'hide'.
+  // Chef ändert einen Abschnitt: Zeiten, Baustelle, Art, Abrechnung eines Termins ('bill' | 'free' | 'hide').
+  // Jede Änderung wird still mit altem Wert gemerkt (change_log). Danach überschreibt das Handy den Abschnitt nicht mehr.
+  const SEG_KINDS = ['work', 'break', 'private'];
+  const segById = (id) => db.prepare('SELECT * FROM segments WHERE id = ? AND deleted_at IS NULL').get(id);
+  const overlaps = (dayId, start, end, exceptId) =>
+    db.prepare('SELECT 1 FROM segments WHERE day_id = ? AND id != ? AND deleted_at IS NULL AND kind != ? AND started_at < ? AND COALESCE(ended_at, ?) > ?')
+      .get(dayId, exceptId, 'travel', end, Number.MAX_SAFE_INTEGER, start);
+  const widenDay = (dayId, start, end, by) => {
+    const d = db.prepare('SELECT * FROM days WHERE id = ?').get(dayId);
+    if (start < d.started_at) {
+      logChange(db, { item: 'day', itemId: d.id, field: 'started_at', oldValue: d.started_at, newValue: start, by });
+      db.prepare('UPDATE days SET started_at = ?, chef_edited = 1 WHERE id = ?').run(start, d.id);
+    }
+    if (d.ended_at != null && end > d.ended_at) {
+      logChange(db, { item: 'day', itemId: d.id, field: 'ended_at', oldValue: d.ended_at, newValue: end, by });
+      db.prepare('UPDATE days SET ended_at = ?, chef_edited = 1 WHERE id = ?').run(end, d.id);
+    }
+  };
+
   app.patch('/api/segments/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const seg = db.prepare('SELECT id FROM segments WHERE id = ?').get(Number(req.params.id));
+    const seg = segById(Number(req.params.id));
     if (!seg) return reply.code(404).send({ error: 'Abschnitt nicht gefunden' });
     const b = req.body ?? {};
-    if (b.billing !== null && !['bill', 'free', 'hide'].includes(b.billing)) return reply.code(400).send({ error: 'Abrechnung ungültig' });
-    db.prepare('UPDATE segments SET billing = ? WHERE id = ?').run(b.billing, seg.id);
+    const next = {
+      started_at: b.started_at === undefined ? seg.started_at : b.started_at,
+      ended_at: b.ended_at === undefined ? seg.ended_at : b.ended_at,
+      site_id: b.site_id === undefined ? seg.site_id : b.site_id,
+      kind: b.kind === undefined ? seg.kind : b.kind,
+      billing: b.billing === undefined ? seg.billing : b.billing,
+    };
+    if (next.billing !== null && !['bill', 'free', 'hide'].includes(next.billing)) return reply.code(400).send({ error: 'Abrechnung ungültig' });
+    const onlyBilling = ['started_at', 'ended_at', 'site_id', 'kind'].every((f) => b[f] === undefined);
+    if (onlyBilling) {
+      logChange(db, { item: 'segment', itemId: seg.id, field: 'billing', oldValue: seg.billing, newValue: next.billing, by: req.user.id });
+      db.prepare('UPDATE segments SET billing = ? WHERE id = ?').run(next.billing, seg.id);
+      return { ok: true };
+    }
+    if (!validTs(next.started_at) || !validTs(next.ended_at)) return reply.code(400).send({ error: 'Beginn und Ende werden gebraucht' });
+    if (next.ended_at <= next.started_at) return reply.code(400).send({ error: 'Das Ende muss nach dem Beginn liegen' });
+    if (next.ended_at - next.started_at > 24 * 3600000) return reply.code(400).send({ error: 'Ein Abschnitt kann höchstens 24 Stunden dauern' });
+    if (seg.kind !== 'travel' && !SEG_KINDS.includes(next.kind)) return reply.code(400).send({ error: 'Art ungültig' });
+    if (next.site_id != null && !db.prepare('SELECT 1 FROM sites WHERE id = ?').get(Number(next.site_id))) return reply.code(400).send({ error: 'Baustelle nicht gefunden' });
+    if (next.kind === 'work' && next.site_id == null) return reply.code(400).send({ error: 'Bitte eine Baustelle wählen' });
+    if (next.kind !== 'work') next.site_id = null;
+    if (overlaps(seg.day_id, next.started_at, next.ended_at, seg.id)) return reply.code(409).send({ error: 'Die Zeit überschneidet sich mit einem anderen Abschnitt an diesem Tag' });
+    db.exec('BEGIN');
+    try {
+      for (const f of ['started_at', 'ended_at', 'site_id', 'kind', 'billing']) {
+        logChange(db, { item: 'segment', itemId: seg.id, field: f, oldValue: seg[f], newValue: next[f], by: req.user.id });
+      }
+      db.prepare('UPDATE segments SET started_at = ?, ended_at = ?, site_id = ?, kind = ?, billing = ?, chef_edited = 1, updated_at = ? WHERE id = ?')
+        .run(next.started_at, next.ended_at, next.site_id, next.kind, next.billing, Date.now(), seg.id);
+      widenDay(seg.day_id, next.started_at, next.ended_at, req.user.id);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
     return { ok: true };
+  });
+
+  // Chef teilt einen Abschnitt in zwei: der erste endet bei "at", der zweite beginnt dort (gleiche Baustelle, danach änderbar).
+  app.post('/api/segments/:id/split', { preHandler: requireAdmin }, async (req, reply) => {
+    const seg = segById(Number(req.params.id));
+    if (!seg) return reply.code(404).send({ error: 'Abschnitt nicht gefunden' });
+    const at = req.body?.at;
+    if (seg.ended_at == null) return reply.code(400).send({ error: 'Ein laufender Abschnitt kann nicht geteilt werden' });
+    if (!validTs(at) || at < seg.started_at + 60000 || at > seg.ended_at - 60000) return reply.code(400).send({ error: 'Die Teilung muss mindestens 1 Minute nach dem Beginn und vor dem Ende liegen' });
+    const now = Date.now();
+    db.exec('BEGIN');
+    try {
+      logChange(db, { item: 'segment', itemId: seg.id, field: 'ended_at', oldValue: seg.ended_at, newValue: at, by: req.user.id });
+      db.prepare('UPDATE segments SET ended_at = ?, chef_edited = 1, updated_at = ? WHERE id = ?').run(at, now, seg.id);
+      const info = db.prepare(
+        `INSERT INTO segments (day_id, client_id, site_id, kind, started_at, ended_at, source, activity, billing, chef_edited, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, ?, 1, ?, ?)`,
+      ).run(seg.day_id, `chef-split-${seg.id}-${at}`, seg.site_id, seg.kind, at, seg.ended_at, seg.activity, seg.billing, now, now);
+      logChange(db, { item: 'segment', itemId: Number(info.lastInsertRowid), field: 'split_from', oldValue: null, newValue: seg.id, by: req.user.id });
+      db.exec('COMMIT');
+      return { ok: true, id: Number(info.lastInsertRowid) };
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  });
+
+  // Chef löscht einen Abschnitt: Er wird nur ausgeblendet, das Original bleibt in der Datenbank.
+  app.delete('/api/segments/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const seg = segById(Number(req.params.id));
+    if (!seg) return reply.code(404).send({ error: 'Abschnitt nicht gefunden' });
+    const now = Date.now();
+    db.exec('BEGIN');
+    try {
+      logChange(db, { item: 'segment', itemId: seg.id, field: 'deleted', oldValue: null, newValue: now, by: req.user.id });
+      db.prepare('UPDATE segments SET deleted_at = ?, chef_edited = 1, updated_at = ? WHERE id = ?').run(now, now, seg.id);
+      // Am Rand des Tages wird der Tag kürzer, damit die gelöschte Zeit nicht als Fahrt zählt.
+      // In der Mitte bleibt die Lücke (sie zählt dann als Fahrt zwischen zwei Orten).
+      const d = db.prepare('SELECT * FROM days WHERE id = ?').get(seg.day_id);
+      const rest = db.prepare('SELECT started_at, ended_at FROM segments WHERE day_id = ? AND deleted_at IS NULL ORDER BY started_at').all(seg.day_id);
+      const EDGE = 2 * 60000;
+      if (rest.length && d.ended_at != null && seg.ended_at != null && !rest.some((r) => r.started_at >= seg.started_at) && d.ended_at - seg.ended_at < EDGE) {
+        logChange(db, { item: 'day', itemId: d.id, field: 'ended_at', oldValue: d.ended_at, newValue: seg.started_at, by: req.user.id });
+        db.prepare('UPDATE days SET ended_at = ?, chef_edited = 1 WHERE id = ?').run(seg.started_at, d.id);
+      } else if (rest.length && !rest.some((r) => r.started_at < seg.started_at) && seg.ended_at != null && seg.started_at - d.started_at < EDGE) {
+        logChange(db, { item: 'day', itemId: d.id, field: 'started_at', oldValue: d.started_at, newValue: seg.ended_at, by: req.user.id });
+        db.prepare('UPDATE days SET started_at = ?, chef_edited = 1 WHERE id = ?').run(seg.ended_at, d.id);
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    return { ok: true };
+  });
+
+  // Änderungen an einem Abschnitt (für "Erstellt … Letzte Änderung …").
+  app.get('/api/segments/:id/history', { preHandler: requireAdmin }, async (req, reply) => {
+    const seg = db.prepare('SELECT id, created_at, updated_at FROM segments WHERE id = ?').get(Number(req.params.id));
+    if (!seg) return reply.code(404).send({ error: 'Abschnitt nicht gefunden' });
+    const changes = db.prepare('SELECT field, changed_at FROM change_log WHERE item = ? AND item_id = ? ORDER BY id').all('segment', seg.id);
+    return { created_at: seg.created_at, updated_at: seg.updated_at, changes: changes.length };
   });
 
   // Chef: Tage eines Mitarbeiters in einem Zeitraum (from/to in Millisekunden), mit allen Punkten.
@@ -375,7 +490,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       .prepare('SELECT id, started_at, ended_at FROM days WHERE user_id = ? AND started_at >= ? AND started_at < ? ORDER BY started_at')
       .all(userId, from, to);
     const pointStmt = db.prepare('SELECT ts, lat, lng, acc FROM points WHERE day_id = ? ORDER BY ts');
-    const segStmt = db.prepare('SELECT id, client_id, site_id, kind, started_at, ended_at, source, activity, billing FROM segments WHERE day_id = ? ORDER BY started_at');
+    const segStmt = db.prepare('SELECT id, client_id, site_id, kind, started_at, ended_at, source, activity, billing, chef_edited, created_at, updated_at FROM segments WHERE day_id = ? AND deleted_at IS NULL ORDER BY started_at');
     const markStmt = db.prepare('SELECT started_at, mode, site_id FROM trip_marks WHERE day_id = ? ORDER BY started_at');
     return days.map((d) => ({ ...d, points: pointStmt.all(d.id), segments: segStmt.all(d.id), trip_marks: markStmt.all(d.id) }));
   });
@@ -388,6 +503,8 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     const b = req.body ?? {};
     if (!validTs(b.started_at)) return reply.code(400).send({ error: 'Startzeit der Fahrt ungültig' });
     if (!['normal', 'material', 'private', 'auto'].includes(b.mode)) return reply.code(400).send({ error: 'Art ungültig' });
+    const before = db.prepare('SELECT mode, site_id FROM trip_marks WHERE day_id = ? AND started_at = ?').get(day.id, b.started_at);
+    logChange(db, { item: 'trip', itemId: day.id, field: `mode@${b.started_at}`, oldValue: before ? `${before.mode}:${before.site_id ?? ''}` : 'auto', newValue: b.mode === 'material' ? `material:${b.site_id}` : b.mode === 'auto' ? 'auto' : `${b.mode}:`, by: req.user.id });
     if (b.mode === 'auto') {
       db.prepare('DELETE FROM trip_marks WHERE day_id = ? AND started_at = ?').run(day.id, b.started_at);
       return { ok: true };

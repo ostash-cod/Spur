@@ -137,3 +137,4 @@ button[aria-pressed='true'] { background: var(--text); color: #fff; border-color
 .wfootday { border-left: 1px solid var(--linie); border-top: 1px solid var(--linie); padding: 6px 8px; font-size: 0.82rem; line-height: 1.35; }
 .wfootday .warn { color: #8a6d00; }
 .wnote.loose { margin-top: 6px; padding: 4px 6px; background: var(--grau); border-radius: 6px; white-space: pre-line; }
+.wnote-pop { margin: 10px 0 0; padding: 8px 10px; background: var(--grau); border-radius: 8px; white-space: pre-line; font-size: 0.92rem; }

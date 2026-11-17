@@ -141,7 +141,7 @@ export function loadCustomerSegments(db, customerId, from, to) {
        JOIN days d ON d.id = s.day_id
        JOIN users u ON u.id = d.user_id
        LEFT JOIN sites si ON si.id = s.site_id
-       WHERE s.started_at >= ? AND s.started_at < ? AND s.ended_at IS NOT NULL AND s.kind IN ('work','break')`,
+       WHERE s.started_at >= ? AND s.started_at < ? AND s.ended_at IS NOT NULL AND s.deleted_at IS NULL AND s.kind IN ('work','break')`,
     )
     .all(lo, hi);
   return {

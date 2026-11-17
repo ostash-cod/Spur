@@ -1556,32 +1556,32 @@ async function woche(main, userArg, dateStr) {
     return el;
   };
 
+  const blockName = (b) => (b.type === 'travel' ? (b.isPrivate ? 'Privatfahrt' : b.label) : b.seg.kind === 'break' ? 'Pause' : b.seg.kind === 'private' ? 'Privat' : b.site?.name ?? 'Ohne Baustelle');
+  const hm = (ms) => { const x = new Date(ms); return `${pad2(x.getHours())}:${pad2(x.getMinutes())}`; };
+  const atTime = (d, v) => { const [H, M] = v.split(':').map(Number); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), H, M).getTime(); };
+
+  // Kleines Fenster beim Klick auf einen Block: Zeit, Betrag, Notiz, Fotos und die Knöpfe Bearbeiten, Teilen, Löschen.
   function blockDialog(b, pd, note, nPhotos) {
     const rate = billableBlock(b) ? rateOf(b.site) : null;
     const hours = (b.end - b.start) / 3600000;
-    const name = b.type === 'travel' ? (b.isPrivate ? 'Privatfahrt' : b.label) : b.seg.kind === 'break' ? 'Pause' : b.seg.kind === 'private' ? 'Privat' : b.site?.name ?? 'Ohne Baustelle';
-    const text = h('textarea', { rows: 6, maxlength: 1000, style: 'width:100%;max-width:none;font:inherit;line-height:1.4;padding:8px;box-sizing:border-box' }, note?.text ?? '');
-    const err = h('p', { class: 'error' });
+    const isSeg = b.type === 'site' && b.seg?.id != null;
     const pics = h('div', { class: 'row', style: 'gap:8px;margin-top:8px' });
+    const iconBtn = (label, onclick, extra = {}) => h('button', { class: 'small', onclick, ...extra }, label);
     const d = openDialog(
-      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin:0' }, h('h2', { style: 'margin:0' }, name), h('button', { class: 'small', 'aria-label': 'Schließen', onclick: () => d.close() }, '✕')),
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin:0' }, h('h2', { style: 'margin:0' }, blockName(b)), h('button', { class: 'small', 'aria-label': 'Schließen', onclick: () => d.close() }, '✕')),
       b.site?.customer_name ? h('p', { class: 'hint', style: 'margin:2px 0 0' }, b.site.customer_name) : null,
+      note ? h('p', { class: 'wnote-pop' }, note.text) : null,
       h('p', { style: 'margin:12px 0 4px' }, `${fmtTime(b.start)} – ${fmtTime(b.end)} Uhr · ${fmtH(b.end - b.start)}`),
       rate != null ? h('p', { style: 'margin:0' }, `${fmtEuro(hours * rate)} · ${showNum(rate)} €/h`) : billableBlock(b) ? h('p', { class: 'hint', style: 'margin:0' }, 'Kein Stundensatz beim Kunden eingetragen.') : null,
-      b.type === 'site' && b.site && !b.site.system ? h('div', {},
-        h('label', {}, 'Notiz / Leistungsbeschreibung'),
-        note ? text : h('p', { class: 'hint' }, 'Zu dieser Baustelle gibt es an diesem Tag keine Notiz vom Mitarbeiter.'),
-        nPhotos ? pics : null,
-      ) : null,
-      err,
-      h('div', { class: 'actions', style: 'margin-top:12px' },
-        note ? h('button', { class: 'primary', onclick: async () => {
-          if (!text.value.trim()) return (err.textContent = 'Die Notiz darf nicht leer sein.');
-          try { await api(`/notes/${note.id}`, { method: 'PATCH', body: { text: text.value } }); d.close(); route(); } catch (ex) { err.textContent = ex.message; }
-        } }, 'Notiz speichern') : null,
+      nPhotos ? pics : null,
+      h('div', { class: 'actions', style: 'margin-top:14px;flex-wrap:wrap' },
+        isSeg ? iconBtn('✎ Bearbeiten', () => { d.close(); editSegmentDialog(b, pd, note); }, { class: 'primary' }) : null,
+        isSeg ? iconBtn('Teilen', () => { d.close(); splitDialog(b); }) : null,
+        isSeg ? iconBtn('Löschen', () => deleteSegment(b, d), { class: 'small danger' }) : null,
+        b.type === 'travel' && b.trip ? iconBtn('Fahrt ändern', () => { d.close(); tripDialog(b.day, b.trip, sites); }, { class: 'primary' }) : null,
         h('a', { href: `#/mitarbeiter/${user.id}/${pd.key}`, onclick: () => d.close() }, 'Tagesansicht öffnen'),
       ),
-      h('p', { class: 'hint', style: 'margin-top:10px' }, 'Zeiten ändern, teilen und löschen kommt im nächsten Schritt.'),
+      b.type === 'travel' ? h('p', { class: 'hint', style: 'margin-top:10px' }, 'Eine Fahrt ist die Zeit zwischen zwei Orten. Sie wird kürzer oder länger, wenn du die Abschnitte davor oder danach änderst.') : null,
     );
     if (nPhotos) {
       for (const p of photosFor(b)) {
@@ -1592,6 +1592,117 @@ async function woche(main, userArg, dateStr) {
         pics.append(img);
       }
     }
+  }
+
+  // „Zeiteintrag bearbeiten“: Start, Ende, Art, Baustelle, Beschreibung. Der alte Stand wird still gemerkt.
+  function editSegmentDialog(b, pd, note) {
+    const seg = b.seg;
+    const startIn = h('input', { type: 'time', id: 'e-start', value: hm(seg.started_at), style: 'width:auto' });
+    const endIn = h('input', { type: 'time', id: 'e-end', value: hm(seg.ended_at ?? b.end), style: 'width:auto' });
+    const durOut = h('strong', { id: 'e-dur' });
+    const kindSel = h('select', { id: 'e-kind', style: 'max-width:none' },
+      ...[['work', 'Arbeit'], ['break', 'Pause'], ['private', 'Privat (nicht bezahlt)']].map(([v, l]) => h('option', { value: v, selected: seg.kind === v }, l)));
+    const choices = sites.filter((x) => !x.archived || x.id === seg.site_id).sort((x, y) => (x.system ? 1 : 0) - (y.system ? 1 : 0) || x.name.localeCompare(y.name, 'de'));
+    const siteSel = h('select', { id: 'e-site', style: 'max-width:none' },
+      h('option', { value: '' }, '– Baustelle wählen –'),
+      ...choices.map((x) => h('option', { value: x.id, selected: x.id === seg.site_id }, `${x.name}${x.kind === 'haendler' ? ' (Händler)' : x.customer_name ? ' · ' + x.customer_name : ''}`)));
+    const rateOut = h('span', {});
+    const desc = h('textarea', { id: 'e-desc', rows: 5, maxlength: 1000, style: 'width:100%;max-width:none;font:inherit;line-height:1.4;padding:8px;box-sizing:border-box' }, note?.text ?? '');
+    const count = h('div', { class: 'hint', style: 'text-align:right;margin:2px 0 0' });
+    const err = h('p', { class: 'error' });
+    const update = () => {
+      const st = atTime(pd.d, startIn.value || '00:00'), en = atTime(pd.d, endIn.value || '00:00');
+      durOut.textContent = en > st ? fmtH(en - st) : '–';
+      const work = kindSel.value === 'work';
+      siteSel.disabled = !work;
+      const site = siteById.get(Number(siteSel.value));
+      const r = work ? rateOf(site) : null;
+      rateOut.textContent = r != null ? `${showNum(r)} €/h (vom Kunden ${site?.customer_name ?? ''})` : work ? 'kein Stundensatz beim Kunden' : '–';
+      count.textContent = `${desc.value.length}/1000`;
+    };
+    for (const el of [startIn, endIn, kindSel, siteSel, desc]) el.addEventListener('input', update);
+    const created = seg.created_at ? fmtDateTime(seg.created_at) : 'unbekannt';
+    const changed = seg.updated_at ? fmtDateTime(seg.updated_at) : '–';
+    const field = (label, el) => h('div', { style: 'flex:1 1 140px' }, h('label', { for: el.id }, label), el);
+    const d = openDialog(
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin:0' }, h('h2', { style: 'margin:0' }, 'Zeiteintrag bearbeiten'), h('button', { class: 'small', 'aria-label': 'Schließen', onclick: () => d.close() }, '✕')),
+      h('p', { class: 'hint', style: 'margin:4px 0 0' }, `${user.name} · ${pd.d.toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })}`),
+      h('div', { class: 'row', style: 'align-items:flex-end' }, field('Start', startIn), field('Ende', endIn), h('div', { style: 'flex:1 1 100px' }, h('label', {}, 'Dauer'), h('div', { style: 'padding:9px 0' }, durOut))),
+      field('Art', kindSel),
+      field('Baustelle', siteSel),
+      h('label', {}, 'Stundensatz'), h('div', { style: 'margin:4px 0 8px' }, rateOut),
+      h('label', { for: 'e-desc' }, 'Beschreibung (Notiz zu dieser Baustelle an diesem Tag)'), desc, count,
+      h('p', { class: 'hint', style: 'font-size:0.8rem' }, `Erstellt: ${created} – Letzte Änderung: ${changed}`),
+      err,
+      h('div', { class: 'actions', style: 'margin-top:10px' },
+        h('button', { class: 'primary', onclick: async () => {
+          err.textContent = '';
+          if (!startIn.value || !endIn.value) return (err.textContent = 'Bitte Start und Ende eintragen.');
+          const st = atTime(pd.d, startIn.value), en = atTime(pd.d, endIn.value);
+          if (en <= st) return (err.textContent = 'Das Ende muss nach dem Start liegen.');
+          const kind = kindSel.value;
+          const siteId = kind === 'work' ? Number(siteSel.value) || null : null;
+          if (kind === 'work' && !siteId) return (err.textContent = 'Bitte eine Baustelle wählen.');
+          const body = {};
+          if (st !== seg.started_at) body.started_at = st;
+          if (en !== (seg.ended_at ?? b.end)) body.ended_at = en;
+          if (kind !== seg.kind) body.kind = kind;
+          if (siteId !== (seg.site_id ?? null)) body.site_id = siteId;
+          try {
+            if (Object.keys(body).length) await api(`/segments/${seg.id}`, { method: 'PATCH', body: { started_at: st, ended_at: en, ...body } });
+            const text = desc.value.trim();
+            if (text !== (note?.text ?? '').trim()) {
+              const target = siteId ?? seg.site_id;
+              const existing = noteFor(pd.key, target);
+              // Eine leere Beschreibung löscht keine Notiz (nichts wird gelöscht).
+              if (existing && text) await api(`/notes/${existing.id}`, { method: 'PATCH', body: { text } });
+              else if (!existing && text) await api('/notes', { method: 'POST', body: { user_id: user.id, client_id: `chef-${user.id}-${pd.key}-${target}-${Date.now()}`, date: pd.key, site_id: target, text } });
+            }
+            d.close();
+            route();
+          } catch (ex) {
+            err.textContent = ex.message;
+          }
+        } }, 'Speichern'),
+        h('button', { onclick: () => d.close() }, 'Abbrechen'),
+      ),
+    );
+    update();
+  }
+
+  // „Teilen“: ein Abschnitt wird zu zwei, zum Beispiel vormittags Baustelle A und nachmittags Baustelle B.
+  function splitDialog(b) {
+    const seg = b.seg;
+    const mid = Math.round((b.start + b.end) / 2 / 300000) * 300000;
+    const atIn = h('input', { type: 'time', id: 's-at', value: hm(mid), style: 'width:auto' });
+    const err = h('p', { class: 'error' });
+    const d = openDialog(
+      h('h2', {}, 'Abschnitt teilen'),
+      h('p', {}, `${blockName(b)}, ${fmtTime(b.start)} – ${fmtTime(b.end)} Uhr`),
+      h('label', { for: 's-at' }, 'Teilen um'), atIn,
+      h('p', { class: 'hint' }, 'Danach gibt es zwei Abschnitte mit derselben Baustelle. Den zweiten kannst du dann bearbeiten und einer anderen Baustelle geben.'),
+      err,
+      h('div', { class: 'actions', style: 'margin-top:10px' },
+        h('button', { class: 'primary', onclick: async () => {
+          const day = new Date(b.start);
+          try {
+            await api(`/segments/${seg.id}/split`, { method: 'POST', body: { at: atTime(day, atIn.value) } });
+            d.close();
+            route();
+          } catch (ex) { err.textContent = ex.message; }
+        } }, 'Teilen'),
+        h('button', { onclick: () => d.close() }, 'Abbrechen'),
+      ),
+    );
+  }
+
+  async function deleteSegment(b, dlg) {
+    if (!confirm(`„${blockName(b)}“ von ${fmtTime(b.start)} bis ${fmtTime(b.end)} Uhr löschen?\n\nDer Abschnitt verschwindet aus Wochenansicht und Bericht. Das Original bleibt still gespeichert.\n\nAm Anfang oder Ende des Tages wird der Tag kürzer. Liegt der Abschnitt in der Mitte, zählt die Lücke danach als Fahrt – wenn sie gar nicht zählen soll, stattdessen „Bearbeiten“ und Art „Privat“ wählen.`)) return;
+    try {
+      await api(`/segments/${b.seg.id}`, { method: 'DELETE' });
+      dlg.close();
+      route();
+    } catch (ex) { alert(ex.message); }
   }
 
   // Kopf: Mitarbeiter wechseln, Heute, Datum, Pfeile, Monat und KW
@@ -1622,7 +1733,7 @@ async function woche(main, userArg, dateStr) {
       h('h1', { style: 'margin:0' }, monthName, h('span', { class: 'wkw' }, ` / KW ${isoWeek(dates[3])}`)),
     ),
     h('div', { class: 'card wcard' },
-      h('div', { class: 'wgrid', style: `grid-template-columns:58px ${perDay.map((pd, i) => (i >= 5 && !pd.list.length ? 'minmax(70px,0.5fr)' : 'minmax(120px,1fr)')).join(' ')}` },
+      h('div', { class: 'wgrid', style: `grid-template-columns:76px ${perDay.map((pd, i) => (i >= 5 && !pd.list.length ? 'minmax(70px,0.5fr)' : 'minmax(120px,1fr)')).join(' ')}` },
         h('div', { class: 'wsum' }, h('div', { class: 'hint' }, 'Woche'), h('strong', {}, fmtH(totalWork)), totalMoney ? h('div', {}, fmtEuro(totalMoney)) : null),
         ...cols.map(({ pd, i }) => h('div', { class: `wday${pd.key === today ? ' today' : ''}`, onclick: () => (location.hash = `#/mitarbeiter/${user.id}/${pd.key}`), title: 'Tagesansicht öffnen' },
           h('strong', {}, `${pad2(pd.d.getDate())} ${WEEKDAYS[i]}`))),
@@ -1640,7 +1751,7 @@ async function woche(main, userArg, dateStr) {
         )),
       ),
     ),
-    h('p', { class: 'hint' }, 'Klick auf einen Block: Zeit, Betrag, Notiz und Fotos. Klick auf den Tag oben: Tagesansicht.'),
+    h('p', { class: 'hint' }, 'Klick auf einen Block: Zeit, Betrag, Notiz und Fotos, dazu Bearbeiten, Teilen und Löschen. Klick auf den Tag oben: Tagesansicht.'),
   );
 }
 

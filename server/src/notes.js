@@ -17,6 +17,13 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
   // Notiz anlegen oder ändern (gleiche client_id = gleiche Notiz). Leerer Text löscht sie.
   app.post('/api/notes', { preHandler: requireUser }, async (req, reply) => {
     const b = req.body ?? {};
+    // Der Chef darf eine Notiz für einen Mitarbeiter anlegen (Beschreibung in der Wochenansicht).
+    let uid = req.user.id;
+    if (b.user_id != null && Number(b.user_id) !== req.user.id) {
+      if (req.user.role !== 'admin') return reply.code(403).send({ error: 'Nur der Chef' });
+      if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(Number(b.user_id))) return reply.code(400).send({ error: 'Mitarbeiter nicht gefunden' });
+      uid = Number(b.user_id);
+    }
     if (!isId(b.client_id)) return reply.code(400).send({ error: 'client_id fehlt' });
     if (typeof b.date !== 'string' || !DATE_RE.test(b.date)) return reply.code(400).send({ error: 'Datum ungültig' });
     if (b.site_id != null && !db.prepare('SELECT 1 FROM sites WHERE id = ?').get(Number(b.site_id))) {
@@ -26,10 +33,10 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
     if (kind !== 'arbeit' && kind !== 'material') return reply.code(400).send({ error: 'Art der Notiz ungültig' });
     const text = typeof b.text === 'string' ? b.text.trim() : '';
     if (text.length > MAX_NOTE) return reply.code(400).send({ error: 'Die Notiz ist zu lang' });
-    const before = db.prepare('SELECT id, text, updated_at FROM notes WHERE user_id = ? AND client_id = ?').get(req.user.id, b.client_id);
+    const before = db.prepare('SELECT id, text, updated_at FROM notes WHERE user_id = ? AND client_id = ?').get(uid, b.client_id);
     if (!text) {
       if (before) logChange(db, { item: 'note', itemId: before.id, field: 'text', oldValue: before.text, newValue: null, by: req.user.id });
-      db.prepare('DELETE FROM notes WHERE user_id = ? AND client_id = ?').run(req.user.id, b.client_id);
+      db.prepare('DELETE FROM notes WHERE user_id = ? AND client_id = ?').run(uid, b.client_id);
       return { deleted: true };
     }
     const at = Number.isInteger(b.updated_at) ? b.updated_at : Date.now();
@@ -38,8 +45,8 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
       `INSERT INTO notes (user_id, client_id, date, site_id, text, updated_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, client_id) DO UPDATE SET date = excluded.date, site_id = excluded.site_id, text = excluded.text, updated_at = excluded.updated_at, kind = excluded.kind
        WHERE excluded.updated_at >= notes.updated_at`,
-    ).run(req.user.id, b.client_id, b.date, b.site_id ?? null, text, at, kind);
-    const row = db.prepare('SELECT id FROM notes WHERE user_id = ? AND client_id = ?').get(req.user.id, b.client_id);
+    ).run(uid, b.client_id, b.date, b.site_id ?? null, text, at, kind);
+    const row = db.prepare('SELECT id FROM notes WHERE user_id = ? AND client_id = ?').get(uid, b.client_id);
     return { id: row.id };
   });
 
