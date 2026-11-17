@@ -25,6 +25,8 @@ export const DEFAULT_SETTINGS = {
   km_rate_employee: 0.3,
   // Variante C: Rohe GPS-Punkte bleiben auf dem Handy und werden dort nach so vielen Stunden gelöscht (nach Tagesende).
   phone_points_hours: 48,
+  // Betriebsschalter: Änderungen protokollieren (alter und neuer Wert). Standard aus, es gibt keine stillen Originale. Später für andere Firmen einschaltbar.
+  protocol_changes: false,
   // Variante B (Betriebsschalter): 0 = aus. 7 bis 14 = Handys schicken den Weg, der Server löscht ihn nach so vielen Tagen.
   server_route_days: 0,
 };
@@ -153,7 +155,7 @@ CREATE TABLE IF NOT EXISTS trip_marks (
   site_id INTEGER REFERENCES sites(id),
   UNIQUE (day_id, started_at)
 );
--- Stille Originale: Jede Änderung durch den Chef speichert den alten Wert. Nichts wird überschrieben oder gelöscht.
+-- Änderungsprotokoll: wird nur geschrieben, wenn der Betriebsschalter protocol_changes an ist (Standard aus). Ältere Einträge bleiben.
 CREATE TABLE IF NOT EXISTS change_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item TEXT NOT NULL,
@@ -313,9 +315,11 @@ export function setSetting(db, key, value) {
   ).run(key, JSON.stringify(value));
 }
 
-/** Merkt still eine Änderung (alter und neuer Wert). Nur für den Hintergrund, nicht für PDF oder Alltagsansicht. */
+/** Merkt eine Änderung (alter und neuer Wert), aber nur wenn der Betriebsschalter „protocol_changes“ an ist. Standard aus. */
 export function logChange(db, { item, itemId, field, oldValue, newValue, by }) {
   if (String(oldValue ?? '') === String(newValue ?? '')) return;
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'protocol_changes'").get();
+  if (!row || JSON.parse(row.value) !== true) return;
   db.prepare('INSERT INTO change_log (item, item_id, field, old_value, new_value, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
     item, itemId, field, oldValue == null ? null : String(oldValue), newValue == null ? null : String(newValue), Date.now(), by ?? null,
   );

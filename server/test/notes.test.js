@@ -82,11 +82,13 @@ test('Material-Notiz: eigene Art, zählt nicht als Arbeitsnotiz, filterbar', asy
   assert.equal((await call('POST', '/api/notes', wt, { client_id: 'mat-0002-cccc', date: '2026-11-06', kind: 'quatsch', text: 'x' })).statusCode, 400);
 });
 
-test('Stille Originale: Änderungen an Notizen werden mit altem Wert gemerkt', async () => {
+test('Protokoll (Betriebsschalter an): Änderungen an Notizen werden mit altem Wert gemerkt, sonst nicht', async () => {
   const { openDb } = await import('../src/db.js');
   const { createUser } = await import('../src/auth.js');
   const { buildApp } = await import('../src/app.js');
+  const { setSetting } = await import('../src/db.js');
   const db = openDb(':memory:');
+  setSetting(db, 'protocol_changes', true);
   const a = createUser(db, { name: 'Chef', role: 'admin' });
   const w = createUser(db, { name: 'Serhii' });
   const app = await buildApp({ db });

@@ -437,12 +437,10 @@ test('Schritt 3: Chef ändert, teilt und löscht Abschnitte; Originale bleiben, 
   d = await list();
   assert.equal(d.ended_at, t0 + 6.5 * H, 'Tag endet mit dem gelöschten letzten Abschnitt früher');
 
-  // Stille Originale
-  const fields = db2.prepare("SELECT field, old_value FROM change_log WHERE item = 'segment' AND item_id = ? ORDER BY id").all(s1.id).map((r) => r.field);
-  assert.deepEqual(fields, ['started_at', 'site_id']);
-  assert.ok(db2.prepare("SELECT COUNT(*) AS n FROM change_log WHERE item = 'day' AND field = 'ended_at'").get().n >= 1);
+  // Keine stillen Originale: ohne Betriebsschalter wird nichts protokolliert
+  assert.equal(db2.prepare('SELECT COUNT(*) AS n FROM change_log').get().n, 0);
   const hist = (await app2.inject({ url: `/api/segments/${s1.id}/history`, headers: auth(at) })).json();
-  assert.ok(hist.updated_at > 0 && hist.changes === 2);
+  assert.ok(hist.updated_at > 0 && hist.changes === 0);
 
   // Chef legt eine Notiz für den Mitarbeiter an, Mitarbeiter darf das nicht für andere
   const n = await app2.inject({ method: 'POST', url: '/api/notes', headers: auth(at), payload: { user_id: w.id, client_id: 'chef-note-1234', date: '2026-11-10', site_id: Number(site2), text: 'Von Chef' } });

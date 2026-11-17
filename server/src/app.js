@@ -356,7 +356,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   });
 
   // Chef ändert einen Abschnitt: Zeiten, Baustelle, Art, Abrechnung eines Termins ('bill' | 'free' | 'hide').
-  // Jede Änderung wird still mit altem Wert gemerkt (change_log). Danach überschreibt das Handy den Abschnitt nicht mehr.
+  // Änderungen werden nur protokolliert, wenn der Betriebsschalter protocol_changes an ist (Standard aus). Danach überschreibt das Handy den Abschnitt nicht mehr.
   const SEG_KINDS = ['work', 'break', 'private'];
   const segById = (id) => db.prepare('SELECT * FROM segments WHERE id = ? AND deleted_at IS NULL').get(id);
   const overlaps = (dayId, start, end, exceptId) =>

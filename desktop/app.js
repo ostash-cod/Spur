@@ -1697,7 +1697,7 @@ async function woche(main, userArg, dateStr) {
   }
 
   async function deleteSegment(b, dlg) {
-    if (!confirm(`„${blockName(b)}“ von ${fmtTime(b.start)} bis ${fmtTime(b.end)} Uhr löschen?\n\nDer Abschnitt verschwindet aus Wochenansicht und Bericht. Das Original bleibt still gespeichert.\n\nAm Anfang oder Ende des Tages wird der Tag kürzer. Liegt der Abschnitt in der Mitte, zählt die Lücke danach als Fahrt – wenn sie gar nicht zählen soll, stattdessen „Bearbeiten“ und Art „Privat“ wählen.`)) return;
+    if (!confirm(`„${blockName(b)}“ von ${fmtTime(b.start)} bis ${fmtTime(b.end)} Uhr löschen?\n\nDer Abschnitt verschwindet aus Wochenansicht und Bericht.\n\nAm Anfang oder Ende des Tages wird der Tag kürzer. Liegt der Abschnitt in der Mitte, zählt die Lücke danach als Fahrt – wenn sie gar nicht zählen soll, stattdessen „Bearbeiten“ und Art „Privat“ wählen.`)) return;
     try {
       await api(`/segments/${b.seg.id}`, { method: 'DELETE' });
       dlg.close();
