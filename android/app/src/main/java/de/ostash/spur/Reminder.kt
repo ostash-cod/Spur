@@ -167,7 +167,7 @@ class ReminderReceiver : BroadcastReceiver() {
             }
             Reminder.ACTION_START_DAY -> {
                 Reminder.cancelNotification(ctx)
-                val fine = ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                val fine = !Prefs.gpsHelp(ctx) || ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 val started = fine && runCatching {
                     Db.get(ctx).startDayIfNone(System.currentTimeMillis())
                     TrackingService.start(ctx)

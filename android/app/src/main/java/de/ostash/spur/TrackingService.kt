@@ -360,6 +360,7 @@ class TrackingService : Service() {
         private const val DWELL_SYSTEM_MS = 60_000L
 
         fun start(ctx: Context) {
+            if (!Prefs.gpsHelp(ctx)) return // GPS-Hilfe ist aus: nichts aufzeichnen
             ContextCompat.startForegroundService(ctx, Intent(ctx, TrackingService::class.java).setAction(ACTION_START))
         }
 

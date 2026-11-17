@@ -320,7 +320,7 @@ fun MainScreen() {
     }
 
     fun startDay(siteId: Long? = null) {
-        if (hasFineLocation(ctx)) {
+        if (!Prefs.gpsHelp(ctx) || hasFineLocation(ctx)) {
             beginDay(siteId)
         } else {
             pendingSite = siteId
@@ -1370,6 +1370,24 @@ fun SettingsScreen() {
         Text("Version ${runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrDefault("?")}", fontWeight = FontWeight.Bold)
         Text("Server: $server", color = Color(0xFF6A6F75), fontSize = 13.sp)
 
+        Text("GPS-Hilfe", fontWeight = FontWeight.Bold)
+        var gpsOn by remember { mutableStateOf(Prefs.gpsHelp(ctx)) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Die App schlägt Orte und Zeiten vor (freiwillig)", Modifier.weight(1f))
+            Switch(checked = gpsOn, onCheckedChange = {
+                gpsOn = it
+                Prefs.setGpsHelp(ctx, it)
+                if (!it) runCatching { TrackingService.stop(ctx) }
+                else if (Db.get(ctx).openDay() != null && hasFineLocation(ctx)) runCatching { TrackingService.start(ctx) }
+            })
+        }
+        Text(
+            if (gpsOn) "An: Die App merkt sich während des Tages deinen Standort nur auf diesem Handy, um Vorschläge zu machen. Du prüfst und änderst alles, bevor du abgibst. Ohne GPS-Hilfe trägst du von Hand ein oder tippst die Baustelle an. Der Zettel sieht immer gleich aus."
+            else "Aus: Es wird kein Standort aufgezeichnet. Du trägst von Hand ein oder tippst die Baustelle an wie auf einer Stempeluhr. Der Zettel sieht immer gleich aus.",
+            color = Color(0xFF6A6F75), fontSize = 13.sp,
+        )
+
+        if (gpsOn) {
         Text("Mein Zuhause", fontWeight = FontWeight.Bold)
         var homeSet by remember { mutableStateOf(Prefs.home(ctx) != null) }
         Text(
@@ -1402,6 +1420,8 @@ fun SettingsScreen() {
         if (homeSet) {
             TextButton(onClick = { Prefs.clearHome(ctx); homeSet = false }) { Text("Zuhause löschen") }
         }
+        }
+
 
         Text("Standort", fontWeight = FontWeight.Bold)
         Text(

@@ -24,6 +24,9 @@ object Prefs {
     fun usesPrivateCar(c: Context): Boolean = sp(c).getBoolean("car", false)
     fun isAdmin(c: Context): Boolean = sp(c).getBoolean("admin", false)
     fun setAdmin(c: Context, admin: Boolean) { sp(c).edit().putBoolean("admin", admin).apply() }
+    /** GPS-Hilfe: freiwillig. Standard: aus für Mitarbeiter, an für den Chef (eigene Daten). Jeder stellt es am eigenen Handy ein. */
+    fun gpsHelp(c: Context): Boolean = sp(c).getBoolean("gps_help", isAdmin(c))
+    fun setGpsHelp(c: Context, on: Boolean) { sp(c).edit().putBoolean("gps_help", on).apply() }
     fun canReceipts(c: Context): Boolean = sp(c).getBoolean("receipts", false)
     fun setCanReceipts(c: Context, v: Boolean) { sp(c).edit().putBoolean("receipts", v).apply() }
 
