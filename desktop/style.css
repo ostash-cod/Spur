@@ -147,3 +147,11 @@ main.wide .wgrid { min-width: 980px; }
 .wblock strong, .wblock .wsub { overflow: hidden; text-overflow: ellipsis; }
 .wblock.striped strong, .wblock.striped .wline1, .wblock.striped .wfoot span:last-child { background: rgba(255, 255, 255, 0.85); color: #1b1c1e; border-radius: 4px; padding: 0 4px; width: fit-content; }
 .wblock.striped .wsub { display: none; }
+
+.wphotos { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; }
+.wphoto { margin: 0; cursor: pointer; }
+.wphoto img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; background: #e6e8ea; display: block; }
+.wphoto figcaption { font-size: 0.7rem; color: var(--text-leise); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wphoto:hover img, .wphoto:focus img { outline: 2px solid #1b1c1e; }
+.wphoto.broken img { opacity: 0.4; }
+dialog.photo[open] { width: min(94vw, 1100px); }

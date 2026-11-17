@@ -82,6 +82,15 @@ let srv;
   // (Donnerstag und Freitag kommen dazu)
   if (!foot[0].includes('7:50 h')) throw new Error('Montag Stunden falsch (erwartet 7:50 h ohne Pause): ' + foot[0]);
   console.log('Woche:', (await page.innerText('.wsum')).replace(/\s+/g, ' '));
+  // Fotos unter dem Tag
+  await page.waitForSelector('.wfootday .wphoto img[src^="blob:"]');
+  const cap = await page.locator('.wfootday').first().locator('.wphoto figcaption').innerText();
+  console.log('Foto unter Montag:', cap);
+  if (!cap.includes('09:00') || !cap.includes('Lilienstraße 77')) throw new Error('Foto ohne Zeit oder Baustelle');
+  await page.locator('.wfootday').first().locator('.wphoto').click();
+  await page.waitForSelector('dialog.photo img');
+  await page.click('dialog button[aria-label="Schließen"]');
+  console.log('Foto groß geöffnet: ok');
   await page.screenshot({ path: `${DATA}/woche.png` });
   const fri = (await page.locator('.wfootday').nth(4).innerText()).replace(/\s+/g, ' ');
   console.log('Freitag (nicht beendet):', fri);

@@ -149,6 +149,7 @@ function positionBox(latEl, lngEl, say, onSet) {
 
 function openDialog(...content) {
   const d = $('dialog');
+  d.className = '';
   d.replaceChildren(...content.flat().filter((x) => x != null && x !== false));
   d.showModal();
   return d;
@@ -1793,6 +1794,35 @@ async function woche(main, userArg, dateStr) {
     } catch (ex) { alert(ex.message); }
   }
 
+  // Fotos des Tages unter der Spalte: Uhrzeit und Baustelle, Klick öffnet groß.
+  const photoSiteName = (p) => (p.site_id ? siteById.get(p.site_id)?.name : photoHome.get(p.id)?.site?.name) ?? '';
+  function dayPhotos(pd) {
+    const list = photos.filter((p) => toDateStr(new Date(p.taken_at)) === pd.key).sort((a, b) => a.taken_at - b.taken_at);
+    if (!list.length) return null;
+    const box = h('div', { class: 'wphotos' });
+    for (const p of list) {
+      const label = `${fmtTime(p.taken_at)}${photoSiteName(p) ? ' · ' + photoSiteName(p) : ''}`;
+      const img = h('img', { alt: `Foto ${label}`, title: label, loading: 'lazy' });
+      const fig = h('figure', { class: 'wphoto', tabindex: 0, role: 'button', title: `${label} – klicken zum Vergrößern` }, img, h('figcaption', {}, label));
+      fetch(`/api/photos/${p.id}/file`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => (r.ok ? r.blob() : Promise.reject())).then((bl) => {
+        const url = URL.createObjectURL(bl);
+        img.src = url;
+        const open = () => showPhoto(url, `${pd.d.toLocaleDateString('de-DE')} ${label}`);
+        fig.onclick = open;
+        fig.onkeydown = (e) => e.key === 'Enter' && open();
+      }).catch(() => fig.classList.add('broken'));
+      box.append(fig);
+    }
+    return h('div', {}, h('div', { class: 'hint', style: 'margin:8px 0 4px' }, `📷 ${list.length} Foto${list.length > 1 ? 's' : ''}`), box);
+  }
+  function showPhoto(url, label) {
+    const d = openDialog(
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin:0 0 8px' }, h('strong', {}, label), h('button', { class: 'small', 'aria-label': 'Schließen', onclick: () => d.close() }, '✕')),
+      h('img', { src: url, alt: label, style: 'max-width:100%;max-height:75vh;display:block;margin:0 auto;border-radius:6px' }),
+    );
+    d.classList.add('photo');
+  }
+
   // Kopf: Mitarbeiter wechseln, Heute, Datum, Pfeile, Monat und KW
   const userSel = h('select', { class: 'wuser', 'aria-label': 'Mitarbeiter wechseln', onchange: (e) => go(mon, Number(e.target.value)) },
     ...users.map((u) => h('option', { value: u.id, selected: u.id === user.id }, u.name)));
@@ -1842,6 +1872,7 @@ async function woche(main, userArg, dateStr) {
             h('div', { class: pd.submitted ? 'hint ok' : 'hint warn' }, pd.submitted ? 'abgegeben ✓' : 'noch nicht abgegeben'),
           ] : h('span', { class: 'hint' }, '–'),
           ...loose.map((n) => h('div', { class: 'wnote loose' }, n.text)),
+          dayPhotos(pd),
         )),
       ),
     ),
