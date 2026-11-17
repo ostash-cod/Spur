@@ -74,7 +74,7 @@ function mergeOptions(input = {}) {
 // --- Berechnung ---------------------------------------------------------------
 // segments: Arbeitsabschnitte beim Kunden [{ userId, name, start, end }] (Millisekunden)
 // breaks: Pausen [{ userId, start, end }], notes: { 'YYYY-MM-DD': 'Text' }
-export function buildReportModel({ segments, breaks = [], customer, rate = null, issuer = {}, type = 'range', from, to, options, notes = {} }) {
+export function buildReportModel({ segments, breaks = [], customer, rate = null, rateFor = null, issuer = {}, type = 'range', from, to, options, notes = {} }) {
   const o = mergeOptions(options);
   const step = o.round_minutes;
   const days = new Map(); // Tag -> Mitarbeiter -> Werte
@@ -112,10 +112,12 @@ export function buildReportModel({ segments, breaks = [], customer, rate = null,
       const netto = round2(minutes / 60);
       const pause = round2(Math.round(p.breakMs / 60000) / 60);
       const freeNetto = round2(Math.round(p.freeMs / 60000) / 60);
-      const betrag = round2(Math.max(0, netto - freeNetto) * (rate ?? 0));
+      // Satz für diese Person an diesem Tag (ab-Datum, abweichender Satz pro Person), sonst der Grundsatz.
+      const satz = rateFor ? rateFor(p.userId, k) ?? rate : rate;
+      const betrag = round2(Math.max(0, netto - freeNetto) * (satz ?? 0));
       nettoSum += netto;
       amountSum += betrag;
-      return { name: p.name, von: clock(p.start), bis: clock(p.end), pause, brutto: round2(netto + pause), netto, satz: rate, betrag };
+      return { name: p.name, von: clock(p.start), bis: clock(p.end), pause, brutto: round2(netto + pause), netto, satz, betrag };
     });
     rows.push({ date: k, label: `${WEEKDAYS[weekdayOf(k)]} ${dmy(k)}`, weekday: weekdayOf(k), persons, note: notes[k] ?? '' });
   }

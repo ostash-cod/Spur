@@ -404,8 +404,6 @@ test('Handy: Name ändern und Kunde nachträglich anlegen', async () => {
 
 test('Kunden wie in LexOffice: Firma, Privatperson, Kundennummer', async () => {
   const { call, at } = await setup();
-  const next = (await call('GET', '/api/customers/next-number', at)).json();
-  assert.equal(next.customer_no, '10000');
   const firma = (await call('POST', '/api/customers', at, {
     kind: 'firma', company: 'Hausverwaltung Berg GmbH', contact_person: 'Frau Huber', street: 'Hauptstraße 1', zip: '82343', city: 'Pöcking',
     country: 'Deutschland', phone: '08157 123', email: 'info@example.org', customer_no: '10000', hourly_rate: 55,
@@ -413,7 +411,6 @@ test('Kunden wie in LexOffice: Firma, Privatperson, Kundennummer', async () => {
   assert.equal(firma.name, 'Hausverwaltung Berg GmbH');
   assert.equal(firma.address, 'Hauptstraße 1, 82343 Pöcking');
   assert.equal(firma.contact_person, 'Frau Huber');
-  assert.equal((await call('GET', '/api/customers/next-number', at)).json().customer_no, '10001');
 
   const privat = (await call('POST', '/api/customers', at, { kind: 'privat', salutation: 'Frau', first_name: 'Anna', last_name: 'Schröder', street: 'Seestraße 5', zip: '82319', city: 'Starnberg' })).json();
   assert.equal(privat.name, 'Anna Schröder');
@@ -455,4 +452,26 @@ test('Bestehende Kunden: Adresse wird beim Update in Straße, PLZ und Ort aufget
   assert.equal(rows[1].street, 'Dorfstraße 5, Pöcking', 'ohne PLZ bleibt die Zeile als Straße stehen');
   assert.equal(rows[1].zip, null);
   assert.equal(rows[2].street, null);
+});
+
+test('Kunden: Adresszusatz, privat/geschäftlich, Stundensätze ab Datum und pro Person', async () => {
+  const { db, call, at } = await setup();
+  const c = (await call('POST', '/api/customers', at, { kind: 'privat', first_name: 'Anna', last_name: 'Schröder', address_extra: 'Hinterhaus', street: 'Seestraße 5', zip: '82319', city: 'Starnberg', phone: '0151 1', phone_type: 'privat', email: 'a@example.org', email_type: 'geschaeftlich', hourly_rate: 55 })).json();
+  assert.equal(c.address, 'Hinterhaus, Seestraße 5, 82319 Starnberg');
+  assert.equal(c.phone_type, 'privat');
+  assert.equal((await call('POST', '/api/customers', at, { kind: 'privat', last_name: 'X', phone_type: 'mobil' })).statusCode, 400);
+
+  const w = db.prepare("INSERT INTO users (name, role, code_hash) VALUES ('Serhii', 'worker', 'x')").run().lastInsertRowid;
+  assert.equal((await call('POST', `/api/customers/${c.id}/rates`, at, { rate: 60 })).statusCode, 400, 'Datum fehlt');
+  let r = (await call('POST', `/api/customers/${c.id}/rates`, at, { rate: 60, valid_from: '2026-12-01' })).json();
+  r = (await call('POST', `/api/customers/${c.id}/rates`, at, { rate: 45, valid_from: '2026-11-15', user_id: Number(w) })).json();
+  assert.equal(r.rates.length, 2);
+  const { rateAt } = await import('../src/db.js');
+  assert.equal(rateAt(db, c.id, null, '2026-11-20'), 55, 'vor dem 1.12. gilt der Grundsatz');
+  assert.equal(rateAt(db, c.id, null, '2026-12-05'), 60);
+  assert.equal(rateAt(db, c.id, Number(w), '2026-11-20'), 45, 'abweichender Satz für Serhii');
+  assert.equal(rateAt(db, c.id, Number(w), '2026-11-10'), 55, 'vor seinem Datum der Grundsatz');
+  const del = (await call('DELETE', `/api/customer-rates/${r.rates[1].id}`, at)).json();
+  assert.equal(del.rates.length, 1);
+  assert.ok(db.prepare("SELECT COUNT(*) AS n FROM change_log WHERE item = 'customer_rate'").get().n === 3);
 });

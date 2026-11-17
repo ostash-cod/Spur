@@ -153,6 +153,17 @@ CREATE TABLE IF NOT EXISTS trip_marks (
   site_id INTEGER REFERENCES sites(id),
   UNIQUE (day_id, started_at)
 );
+-- Stundensätze ab einem Datum, für alle (user_id leer) oder abweichend für einen Mitarbeiter.
+-- Ohne passenden Eintrag gilt customers.hourly_rate.
+CREATE TABLE IF NOT EXISTS customer_rates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id),
+  rate REAL NOT NULL,
+  valid_from TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS customer_rates_c ON customer_rates (customer_id, valid_from);
 -- Stille Originale: Jede Änderung durch den Chef speichert den alten Wert. Nichts wird überschrieben oder gelöscht.
 CREATE TABLE IF NOT EXISTS change_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,7 +218,7 @@ export function openDb(path = ':memory:') {
   if (!hasColumn('sites', 'kind')) db.exec("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'");
   // Kunden wie in LexOffice: Firma oder Privatperson, Adresse in einzelnen Feldern, Kundennummer.
   // name und address bleiben als Anzeige erhalten und werden aus diesen Feldern zusammengesetzt.
-  for (const col of ['kind', 'salutation', 'first_name', 'last_name', 'company', 'contact_person', 'street', 'zip', 'city', 'country', 'phone', 'customer_no', 'note']) {
+  for (const col of ['kind', 'salutation', 'first_name', 'last_name', 'company', 'contact_person', 'street', 'zip', 'city', 'country', 'phone', 'customer_no', 'note', 'address_extra', 'email_type', 'phone_type']) {
     if (!hasColumn('customers', col)) {
       db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
       if (col === 'note') splitOldAddresses(db);
@@ -319,4 +330,15 @@ export function logChange(db, { item, itemId, field, oldValue, newValue, by }) {
   db.prepare('INSERT INTO change_log (item, item_id, field, old_value, new_value, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
     item, itemId, field, oldValue == null ? null : String(oldValue), newValue == null ? null : String(newValue), Date.now(), by ?? null,
   );
+}
+
+/**
+ * Stundensatz eines Kunden für einen Mitarbeiter an einem Tag (YYYY-MM-DD).
+ * Reihenfolge: eigener Satz der Person ab Datum, dann Satz für alle ab Datum, dann der Grundsatz des Kunden.
+ */
+export function rateAt(db, customerId, userId, date) {
+  const row = (uid) => db.prepare(
+    `SELECT rate FROM customer_rates WHERE customer_id = ? AND ${uid == null ? 'user_id IS NULL' : 'user_id = ?'} AND valid_from <= ? ORDER BY valid_from DESC, id DESC LIMIT 1`,
+  ).get(...(uid == null ? [customerId, date] : [customerId, uid, date]));
+  return (userId != null ? row(userId) : null)?.rate ?? row(null)?.rate ?? db.prepare('SELECT hourly_rate FROM customers WHERE id = ?').get(customerId)?.hourly_rate ?? null;
 }

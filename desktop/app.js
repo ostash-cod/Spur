@@ -149,7 +149,7 @@ function positionBox(latEl, lngEl, say, onSet) {
 
 function openDialog(...content) {
   const d = $('dialog');
-  d.replaceChildren(...content);
+  d.replaceChildren(...content.flat().filter((x) => x != null && x !== false));
   d.showModal();
   return d;
 }
@@ -686,9 +686,9 @@ async function kunden(main) {
       h('td', {}, c.customer_no ?? ''),
       h('td', {},
         h('strong', {}, c.name),
-        h('div', { class: 'hint', style: 'margin:0' }, [c.kind === 'privat' ? 'Privatperson' : 'Firma', c.contact_person ? `Ansprechpartner: ${c.contact_person}` : null].filter(Boolean).join(' · ')),
+        h('div', { class: 'hint', style: 'margin:0' }, c.kind === 'privat' ? 'Person' : 'Firma'),
       ),
-      h('td', {}, c.street ?? (c.zip || c.city ? '' : c.address ?? ''), c.zip || c.city ? h('div', {}, [c.zip, c.city].filter(Boolean).join(' ')) : null),
+      h('td', {}, c.address_extra ? h('div', { class: 'hint', style: 'margin:0' }, c.address_extra) : null, c.street ?? (c.zip || c.city ? '' : c.address ?? ''), c.zip || c.city ? h('div', {}, [c.zip, c.city].filter(Boolean).join(' ')) : null),
       h('td', {},
         c.phone ? h('div', { style: 'white-space:nowrap' }, h('a', { href: `tel:${c.phone.replace(/[^0-9+]/g, '')}` }, c.phone)) : null,
         c.email ? h('div', { style: 'word-break:break-all' }, h('a', { href: `mailto:${c.email}` }, c.email)) : null),
@@ -969,83 +969,147 @@ function extraPointsBox(site) {
   return box;
 }
 
-function customerDialog(c) {
-  // Ältere Kunden haben nur einen Namen: der gilt dann als Firmenname.
-  const v = { ...(c ?? { kind: 'firma', country: 'Deutschland' }) };
-  if (c && !v.company && !v.first_name && !v.last_name) v.company = c.name;
+// Kundenmaske wie LexOffice „Neuer Kontakt“: Person oder Firma, Adresse, E-Mail und Telefon (privat/geschäftlich),
+// Notiz, Stundensatz (Grundsatz und Änderungen ab Datum, auch pro Mitarbeiter). Neue Kunden: Baustelle im selben Fenster.
+async function customerDialog(c) {
+  const [users, sites] = await Promise.all([api('/users').catch(() => []), api('/sites?all=1').catch(() => [])]);
+  const v = { ...(c ?? { kind: 'privat' }) };
+  if (c && !v.company && !v.first_name && !v.last_name) v.company = c.name; // ältere Kunden: Name gilt als Firmenname
   const inp = (id, value, extra = {}) => h('input', { id, value: value ?? '', style: 'max-width:none', ...extra });
-  const field = (label, el, grow = 1) => h('div', { style: `flex:${grow} 1 120px;min-width:0` }, h('label', { for: el.id }, label), el);
+  const field = (label, el, grow = 1) => h('div', { style: `flex:${grow} 1 110px;min-width:0` }, h('label', { for: el.id }, label), el);
+  const typeSel = (id, value) => h('select', { id, style: 'max-width:none' },
+    h('option', { value: 'geschaeftlich', selected: value !== 'privat' }, 'geschäftlich'), h('option', { value: 'privat', selected: value === 'privat' }, 'privat'));
   const f = {
-    company: inp('k-firma', v.company, { placeholder: 'zum Beispiel Hausverwaltung Berg GmbH' }),
-    contact_person: inp('k-ansprech', v.contact_person),
-    salutation: h('select', { id: 'k-anrede' }, ...['', 'Frau', 'Herr', 'Familie', 'Divers'].map((x) => h('option', { value: x, selected: (v.salutation ?? '') === x }, x || '–'))),
+    company: inp('k-firma', v.company, { placeholder: 'Firmenname' }),
+    salutation: h('select', { id: 'k-anrede', style: 'max-width:none' }, ...[['', 'Keine Anrede'], ['Frau', 'Frau'], ['Herr', 'Herr'], ['Familie', 'Familie']].map(([x, l]) => h('option', { value: x, selected: (v.salutation ?? '') === x }, l))),
     first_name: inp('k-vorname', v.first_name),
     last_name: inp('k-nachname', v.last_name),
-    street: inp('k-strasse', v.street, { placeholder: 'Straße und Hausnummer' }),
+    customer_no: inp('k-nr', v.customer_no, { disabled: true, placeholder: 'wird später aus LexOffice übernommen' }),
+    address_extra: inp('k-zusatz', v.address_extra, { placeholder: 'zum Beispiel Hinterhaus, 2. OG' }),
+    street: inp('k-strasse', v.street),
     zip: inp('k-plz', v.zip, { inputmode: 'numeric', maxlength: 10 }),
     city: inp('k-ort', v.city),
-    country: inp('k-land', v.country ?? 'Deutschland'),
-    phone: inp('k-tel', v.phone, { type: 'tel' }),
     email: inp('k-mail', v.email, { type: 'email' }),
-    customer_no: inp('k-nr', v.customer_no, { placeholder: 'wie in LexOffice' }),
+    email_type: typeSel('k-mail-art', v.email_type),
+    phone: inp('k-tel', v.phone, { type: 'tel' }),
+    phone_type: typeSel('k-tel-art', v.phone_type),
+    note: h('textarea', { id: 'k-notiz', rows: 2, style: 'width:100%;max-width:none;font:inherit;padding:8px;box-sizing:border-box' }, v.note ?? ''),
     hourly_rate: inp('k-satz', showNum(v.hourly_rate), { inputmode: 'decimal', placeholder: 'zum Beispiel 55' }),
-    note: h('textarea', { id: 'k-notiz', rows: 2, style: 'width:100%;max-width:none' }, v.note ?? ''),
   };
-  let kind = v.kind === 'privat' ? 'privat' : 'firma';
-  const kindBtn = (k, label) => h('button', { type: 'button', class: 'small', 'aria-pressed': String(kind === k), onclick: () => { kind = k; showKind(); } }, label);
-  const kinds = [kindBtn('firma', 'Firma'), kindBtn('privat', 'Privatperson')];
-  const firmaBox = h('div', {}, h('div', { class: 'row' }, field('Firmenname', f.company, 2), field('Ansprechpartner (optional)', f.contact_person, 2)));
-  const personBox = h('div', {}, h('div', { class: 'row' }, field('Anrede', f.salutation, 1), field('Vorname', f.first_name, 2), field('Nachname', f.last_name, 2)));
+  let kind = v.kind === 'firma' ? 'firma' : 'privat';
+  const kindRadio = (k, label) => h('label', { class: 'check', style: 'margin:0 18px 0 0' },
+    h('input', { type: 'radio', name: 'k-art', value: k, checked: kind === k, onchange: () => { kind = k; showKind(); } }), label);
+  const firmaBox = h('div', { class: 'row' }, field('Firmenname', f.company, 3));
+  const personBox = h('div', { class: 'row' }, field('Anrede', f.salutation, 1), field('Vorname', f.first_name, 2), field('Nachname', f.last_name, 2));
+
+  // Stundensatz: Grundsatz für alle, dazu Änderungen ab Datum (für alle oder einen Mitarbeiter)
+  const rateList = h('div', {});
+  const showRates = (rates) => rateList.replaceChildren(...(rates ?? []).map((r) => h('div', { class: 'actions', style: 'margin:4px 0;align-items:center' },
+    h('span', {}, `ab ${new Date(r.valid_from + 'T12:00').toLocaleDateString('de-DE')}: ${showNum(r.rate)} €/h ${r.user_id ? 'für ' + (r.user_name ?? '?') : 'für alle'}`),
+    h('button', { type: 'button', class: 'small danger', 'aria-label': 'Satz entfernen', onclick: async () => {
+      try { showRates((await api(`/customer-rates/${r.id}`, { method: 'DELETE' })).rates); } catch (ex) { err.textContent = ex.message; }
+    } }, '✕'))));
+  const newRate = inp('k-satz-neu', '', { inputmode: 'decimal', placeholder: '€/h', style: 'width:90px' });
+  const newFrom = inp('k-satz-ab', toDateStr(new Date()), { type: 'date', style: 'width:auto' });
+  const newWho = h('select', { id: 'k-satz-fuer', style: 'width:auto' }, h('option', { value: '' }, 'für alle'), ...users.filter((u) => u.active).map((u) => h('option', { value: u.id }, `nur ${u.name}`)));
+  const rateBox = c ? h('div', { style: 'margin-top:6px' },
+    rateList,
+    h('div', { class: 'actions', style: 'align-items:center;flex-wrap:wrap;margin-top:6px' },
+      h('span', {}, 'Neuer Satz'), newRate, h('span', {}, 'ab'), newFrom, newWho,
+      h('button', { type: 'button', class: 'small', onclick: async () => {
+        const r = num(newRate.value);
+        if (r == null || Number.isNaN(r)) return (err.textContent = 'Bitte einen Stundensatz eintragen.');
+        try {
+          const upd = await api(`/customers/${c.id}/rates`, { method: 'POST', body: { rate: r, valid_from: newFrom.value, user_id: newWho.value || null } });
+          showRates(upd.rates); newRate.value = ''; err.textContent = '';
+        } catch (ex) { err.textContent = ex.message; }
+      } }, 'Hinzufügen'))) : h('p', { class: 'hint', style: 'margin:4px 0 0' }, 'Änderungen ab einem Datum oder für einzelne Mitarbeiter kannst du nach dem Speichern eintragen.');
+  if (c) showRates(c.rates);
+
+  // Baustelle im selben Fenster (nur bei neuen Kunden)
+  const sameAddr = h('input', { type: 'checkbox', id: 'k-bs-gleich', checked: true, onchange: () => showSite() });
+  const wantSite = h('input', { type: 'checkbox', id: 'k-bs-an', checked: true, onchange: () => showSite() });
+  const bs = { street: inp('k-bs-strasse', ''), zip: inp('k-bs-plz', '', { inputmode: 'numeric', maxlength: 10 }), city: inp('k-bs-ort', '') };
+  const siteName = inp('k-bs-name', '');
+  let nameTouched = false;
+  siteName.addEventListener('input', () => { nameTouched = true; });
+  const otherAddr = h('div', {}, h('div', { class: 'row' }, field('Straße und Hausnummer der Baustelle', bs.street, 3)), h('div', { class: 'row' }, field('PLZ', bs.zip, 1), field('Ort', bs.city, 2)));
+  const siteFields = h('div', {}, h('label', { class: 'check' }, sameAddr, 'Baustelle ist an der Adresse des Kunden'), otherAddr, field('Name der Baustelle (Kachel am Handy)', siteName, 3));
+  const siteBox = c ? null : h('div', { class: 'card', style: 'margin:14px 0 0;padding:12px 14px;background:var(--grau)' },
+    h('label', { class: 'check', style: 'margin:0' }, wantSite, h('strong', {}, 'Baustelle gleich mit anlegen')), siteFields);
+  const siteAddr = () => (sameAddr.checked ? { street: f.street.value.trim(), zip: f.zip.value.trim(), city: f.city.value.trim() } : { street: bs.street.value.trim(), zip: bs.zip.value.trim(), city: bs.city.value.trim() });
+  // Kachel: „Straße Nr · Nachname“ (Firma: Firmenname); die Stadt nur, wenn es die Straße schon gibt.
+  const suggestName = () => {
+    const a = siteAddr();
+    const who = kind === 'firma' ? f.company.value.trim() : f.last_name.value.trim() || f.first_name.value.trim();
+    const streetName = a.street.replace(/\s*\d+\s*[a-zA-Z]?\s*$/, '').trim().toLowerCase();
+    const dup = streetName && sites.some((x) => !x.system && String(x.address ?? x.name).toLowerCase().includes(streetName));
+    return [a.street + (dup && a.city ? ` (${a.city})` : ''), who].filter(Boolean).join(' · ');
+  };
+  const showSite = () => {
+    siteFields.style.display = wantSite.checked ? '' : 'none';
+    otherAddr.style.display = sameAddr.checked ? 'none' : '';
+    if (!nameTouched) siteName.value = suggestName();
+  };
+  for (const el of [f.street, f.zip, f.city, f.company, f.first_name, f.last_name, bs.street, bs.city]) el.addEventListener('input', () => !c && showSite());
   const showKind = () => {
-    kinds[0].setAttribute('aria-pressed', String(kind === 'firma'));
-    kinds[1].setAttribute('aria-pressed', String(kind === 'privat'));
     firmaBox.style.display = kind === 'firma' ? '' : 'none';
     personBox.style.display = kind === 'privat' ? '' : 'none';
+    if (!c) showSite();
   };
+
   const err = h('p', { class: 'error' });
   const d = openDialog(
-    h('h2', {}, c ? 'Kunde bearbeiten' : 'Neuer Kunde'),
-    h('div', { class: 'actions', style: 'margin:0 0 6px' }, ...kinds),
-    firmaBox,
-    personBox,
+    h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin:0' }, h('h2', { style: 'margin:0' }, c ? 'Kunde bearbeiten' : '+ Neuer Kunde'), h('button', { type: 'button', class: 'small', 'aria-label': 'Schließen', onclick: () => d.close() }, '✕')),
+    h('div', { style: 'display:flex;margin:10px 0 4px' }, kindRadio('privat', 'Person'), kindRadio('firma', 'Firma')),
+    personBox, firmaBox,
+    h('div', { class: 'row' }, field('Kunden-Nr.', f.customer_no, 2)),
+    h('h3', { style: 'margin:14px 0 0;font-size:1rem' }, 'Adresse'),
+    h('div', { class: 'row' }, field('Adresszusatz', f.address_extra, 3)),
     h('div', { class: 'row' }, field('Straße und Hausnummer', f.street, 3)),
-    h('div', { class: 'row' }, field('PLZ', f.zip, 1), field('Ort', f.city, 2), field('Land', f.country, 1)),
-    h('div', { class: 'row' }, field('Telefon', f.phone, 1), field('E-Mail (für Stundennachweise)', f.email, 2)),
-    h('div', { class: 'row' }, field('Kundennummer', f.customer_no, 1), field('Stundensatz in Euro', f.hourly_rate, 1)),
-    h('label', { for: 'k-notiz' }, 'Notiz (optional)'),
-    f.note,
+    h('div', { class: 'row' }, field('PLZ', f.zip, 1), field('Ort', f.city, 2)),
+    h('div', { class: 'row' }, field('E-Mail', f.email, 3), field('Art', f.email_type, 1)),
+    h('div', { class: 'row' }, field('Rufnummer', f.phone, 3), field('Art', f.phone_type, 1)),
+    h('label', { for: 'k-notiz' }, 'Notiz'), f.note,
+    h('h3', { style: 'margin:14px 0 0;font-size:1rem' }, 'Stundensatz'),
+    h('div', { class: 'row' }, field('Satz für alle (€/h)', f.hourly_rate, 1), h('div', { style: 'flex:2 1 110px' })),
+    rateBox,
+    siteBox,
     err,
-    h(
-      'div',
-      { class: 'actions', style: 'margin-top:14px' },
-      h(
-        'button',
-        {
-          class: 'primary',
-          onclick: async () => {
-            const r = num(f.hourly_rate.value);
-            if (Number.isNaN(r)) return (err.textContent = 'Der Stundensatz muss eine Zahl sein.');
-            const body = { kind, hourly_rate: r };
-            for (const k of ['contact_person', 'company', 'salutation', 'first_name', 'last_name', 'street', 'zip', 'city', 'country', 'phone', 'email', 'customer_no', 'note']) body[k] = f[k].value.trim();
-            if (kind === 'firma') Object.assign(body, { salutation: '', first_name: '', last_name: '' });
-            else Object.assign(body, { company: '', contact_person: '' });
-            try {
-              await api(c ? `/customers/${c.id}` : '/customers', { method: c ? 'PATCH' : 'POST', body });
-              d.close();
-              route();
-            } catch (ex) {
-              err.textContent = ex.message;
-            }
-          },
-        },
-        'Speichern',
-      ),
-      h('button', { onclick: () => d.close() }, 'Abbrechen'),
+    h('div', { class: 'actions', style: 'margin-top:14px' },
+      h('button', { class: 'primary', onclick: async () => {
+        err.textContent = '';
+        const r = num(f.hourly_rate.value);
+        if (Number.isNaN(r)) return (err.textContent = 'Der Stundensatz muss eine Zahl sein.');
+        const body = { kind, hourly_rate: r };
+        for (const k of ['company', 'salutation', 'first_name', 'last_name', 'address_extra', 'street', 'zip', 'city', 'email', 'email_type', 'phone', 'phone_type', 'note']) body[k] = f[k].value.trim();
+        if (kind === 'firma') Object.assign(body, { salutation: '', first_name: '', last_name: '' });
+        else Object.assign(body, { company: '' });
+        if (!body.email) body.email_type = '';
+        if (!body.phone) body.phone_type = '';
+        const makeSite = !c && wantSite.checked;
+        const a = makeSite ? siteAddr() : null;
+        if (makeSite && !a.street) return (err.textContent = 'Für die Baustelle fehlt die Straße.');
+        if (makeSite && !siteName.value.trim()) return (err.textContent = 'Bitte einen Namen für die Baustelle eintragen.');
+        try {
+          const saved = await api(c ? `/customers/${c.id}` : '/customers', { method: c ? 'PATCH' : 'POST', body });
+          if (makeSite) {
+            const address = [a.street, [a.zip, a.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+            let pos = null;
+            try { pos = (await api(`/geocode?q=${encodeURIComponent(address)}`))[0] ?? null; } catch { pos = null; }
+            await api('/sites', { method: 'POST', body: { name: siteName.value.trim(), address, customer_id: saved.id, lat: pos?.lat ?? null, lng: pos?.lng ?? null } });
+            if (!pos) alert('Kunde und Baustelle sind angelegt. Die Position der Baustelle wurde nicht gefunden. Bitte bei der Baustelle unter „Bearbeiten“ nachtragen, sonst erkennt das Handy sie nicht.');
+          }
+          d.close();
+          route();
+        } catch (ex) {
+          err.textContent = ex.message;
+        }
+      } }, 'Speichern'),
+      h('button', { type: 'button', onclick: () => d.close() }, 'Abbrechen'),
     ),
   );
   showKind();
-  // Neue Kunden bekommen die nächste freie Kundennummer als Vorschlag.
-  if (!c) api('/customers/next-number').then((n) => { if (!f.customer_no.value) f.customer_no.value = n.customer_no; }).catch(() => {});
   (kind === 'firma' ? f.company : f.first_name).focus();
 }
 
@@ -1480,7 +1544,13 @@ async function woche(main, userArg, dateStr) {
     api(`/sheets?from=${toDateStr(dates[0])}&to=${toDateStr(dates[6])}&user_id=${user.id}`).catch(() => []),
   ]);
   const siteById = new Map(sites.map((x) => [x.id, x]));
-  const rateOf = (site) => customers.find((c) => c.id === site?.customer_id)?.hourly_rate ?? null;
+  // Satz für diesen Mitarbeiter an diesem Tag: eigener Satz ab Datum, dann Satz für alle ab Datum, dann Grundsatz.
+  const rateOf = (site, dateKey = toDateStr(new Date())) => {
+    const c = customers.find((x) => x.id === site?.customer_id);
+    if (!c) return null;
+    const pick = (uid) => (c.rates ?? []).filter((r) => (uid == null ? r.user_id == null : r.user_id === uid) && r.valid_from <= dateKey).sort((x, y) => (x.valid_from < y.valid_from ? -1 : 1)).pop()?.rate;
+    return pick(user.id) ?? pick(null) ?? c.hourly_rate ?? null;
+  };
   const go = (d, uid = user.id) => (location.hash = `#/woche/${uid}/${toDateStr(d)}`);
 
   // Blöcke pro Tag
@@ -1491,7 +1561,7 @@ async function woche(main, userArg, dateStr) {
     const work = list.reduce((a, x) => a + ((x.ended_at ?? Date.now()) - x.started_at), 0)
       - blocks.filter((b) => b.type === 'site' && (b.seg.kind === 'break' || b.seg.kind === 'private')).reduce((a, b) => a + (b.end - b.start), 0)
       - blocks.filter((b) => b.isPrivate).reduce((a, b) => a + (b.end - b.start), 0);
-    const money = blocks.filter(billableBlock).reduce((a, b) => a + ((b.end - b.start) / 3600000) * (rateOf(b.site) ?? 0), 0);
+    const money = blocks.filter(billableBlock).reduce((a, b) => a + ((b.end - b.start) / 3600000) * (rateOf(b.site, key) ?? 0), 0);
     const submitted = sheets.some((sh) => sh.date === key);
     return { d, key, list, blocks, work: Math.max(0, work), money, submitted,
       start: list.length ? Math.min(...list.map((x) => x.started_at)) : null,
@@ -1562,7 +1632,7 @@ async function woche(main, userArg, dateStr) {
 
   // Kleines Fenster beim Klick auf einen Block: Zeit, Betrag, Notiz, Fotos und die Knöpfe Bearbeiten, Teilen, Löschen.
   function blockDialog(b, pd, note, nPhotos) {
-    const rate = billableBlock(b) ? rateOf(b.site) : null;
+    const rate = billableBlock(b) ? rateOf(b.site, pd.key) : null;
     const hours = (b.end - b.start) / 3600000;
     const isSeg = b.type === 'site' && b.seg?.id != null;
     const pics = h('div', { class: 'row', style: 'gap:8px;margin-top:8px' });
@@ -1616,7 +1686,7 @@ async function woche(main, userArg, dateStr) {
       const work = kindSel.value === 'work';
       siteSel.disabled = !work;
       const site = siteById.get(Number(siteSel.value));
-      const r = work ? rateOf(site) : null;
+      const r = work ? rateOf(site, pd.key) : null;
       rateOut.textContent = r != null ? `${showNum(r)} €/h (vom Kunden ${site?.customer_name ?? ''})` : work ? 'kein Stundensatz beim Kunden' : '–';
       count.textContent = `${desc.value.length}/1000`;
     };

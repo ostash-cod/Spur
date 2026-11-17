@@ -140,3 +140,22 @@ test('Besichtigung: Zeit sichtbar, aber 0 € (free); bei Abrechnung (bill) wie 
   const m2 = buildReportModel({ ...base, segments: [normal, { ...besicht, free: false }] });
   assert.equal(m2.rows.find((r) => r.persons.length).persons[0].betrag, 110);
 });
+
+test('Bericht: Satz pro Person und Tag (rateFor) geht vor dem Grundsatz', async () => {
+  const day = Date.UTC(2026, 10, 10, 7, 0, 0);
+  const H = 3600000;
+  const model = buildReportModel({
+    segments: [
+      { userId: 1, name: 'Anna', start: day, end: day + 2 * H },
+      { userId: 2, name: 'Bert', start: day, end: day + 2 * H },
+    ],
+    customer: { name: 'K' }, rate: 50, rateFor: (uid) => (uid === 2 ? 40 : null),
+    from: '2026-11-10', to: '2026-11-10', options: {},
+  });
+  const [anna, bert] = model.rows[0].persons;
+  assert.equal(anna.satz, 50);
+  assert.equal(anna.betrag, 100);
+  assert.equal(bert.satz, 40);
+  assert.equal(bert.betrag, 80);
+  assert.equal(model.totals.betrag, 180);
+});

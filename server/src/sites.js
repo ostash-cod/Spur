@@ -1,4 +1,4 @@
-import { getSettings, setSetting, ensureSystemSites } from './db.js';
+import { getSettings, setSetting, ensureSystemSites, logChange } from './db.js';
 
 // Farben für Baustellen. Gelb (Anfahrt) und Nebelgrau (Pause, Privat) sind reserviert.
 export const SITE_COLORS = [
@@ -127,7 +127,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
   const SITE_SELECT = `SELECT s.*, c.name AS customer_name FROM sites s LEFT JOIN customers c ON c.id = s.customer_id`;
 
   // --- Kunden (nur Chef) ---
-  const CUSTOMER_FIELDS = ['salutation', 'first_name', 'last_name', 'company', 'contact_person', 'street', 'zip', 'city', 'country', 'phone', 'customer_no', 'note'];
+  const CUSTOMER_FIELDS = ['salutation', 'first_name', 'last_name', 'company', 'contact_person', 'address_extra', 'street', 'zip', 'city', 'country', 'phone', 'phone_type', 'email_type', 'customer_no', 'note'];
   const customerRow = (r) => ({
     id: r.id,
     name: r.name,
@@ -138,6 +138,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     kind: r.kind ?? 'firma',
     ...Object.fromEntries(CUSTOMER_FIELDS.map((f) => [f, r[f] ?? null])),
     site_count: db.prepare('SELECT COUNT(*) AS n FROM sites WHERE customer_id = ?').get(r.id).n,
+    rates: db.prepare('SELECT r.id, r.user_id, u.name AS user_name, r.rate, r.valid_from FROM customer_rates r LEFT JOIN users u ON u.id = r.user_id WHERE r.customer_id = ? ORDER BY r.valid_from, r.id').all(r.id),
   });
 
   /**
@@ -150,13 +151,14 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     if (!['firma', 'privat'].includes(c.kind)) throw new Error('Art muss Firma oder Privatperson sein');
     for (const f of CUSTOMER_FIELDS) c[f] = pick(f, f === 'note' ? 1000 : 120);
     if (c.zip && !/^[0-9A-Za-z -]{3,10}$/.test(c.zip)) throw new Error('PLZ ungültig');
+    for (const f of ['email_type', 'phone_type']) if (c[f] && !['privat', 'geschaeftlich'].includes(c[f])) throw new Error('Art von E-Mail oder Telefon: privat oder geschäftlich');
     if (c.customer_no && !/^[0-9A-Za-z-]{1,20}$/.test(c.customer_no)) throw new Error('Kundennummer: nur Ziffern, Buchstaben und Bindestrich');
     const person = [c.first_name, c.last_name].filter(Boolean).join(' ');
     const structured = CUSTOMER_FIELDS.some((f) => b[f] !== undefined) || b.kind !== undefined;
     c.name = (structured ? (c.kind === 'firma' ? c.company : person) || c.company || person : null) || (b.name === undefined ? row.name : text(b.name));
     if (!c.name) throw new Error(c.kind === 'privat' ? 'Vor- oder Nachname fehlt' : 'Firmenname fehlt');
     const place = [c.zip, c.city].filter(Boolean).join(' ');
-    const built = [c.street, place].filter(Boolean).join(', ');
+    const built = [c.address_extra, c.street, place].filter(Boolean).join(', ');
     c.address = structured && built ? built : b.address === undefined ? row.address ?? null : text(b.address, 300);
     c.email = b.email === undefined ? row.email ?? null : text(b.email) || null;
     if (c.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email)) throw new Error('E-Mail ungültig');
@@ -173,12 +175,6 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
   app.get('/api/customers', { preHandler: requireAdmin }, async () =>
     db.prepare('SELECT * FROM customers ORDER BY archived, name COLLATE NOCASE').all().map(customerRow),
   );
-
-  // Vorschlag für die nächste Kundennummer (wie in LexOffice ab 10000).
-  app.get('/api/customers/next-number', { preHandler: requireAdmin }, async () => {
-    const nums = db.prepare('SELECT customer_no FROM customers WHERE customer_no IS NOT NULL').all().map((r) => Number(r.customer_no)).filter(Number.isInteger);
-    return { customer_no: String(nums.length ? Math.max(...nums) + 1 : 10000) };
-  });
 
   app.post('/api/customers', { preHandler: requireAdmin }, async (req, reply) => {
     let c;
@@ -210,6 +206,28 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
       id,
     );
     return customerRow(db.prepare('SELECT * FROM customers WHERE id = ?').get(id));
+  });
+
+  // Stundensätze ab einem Datum (für alle oder für einen Mitarbeiter).
+  app.post('/api/customers/:id/rates', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id);
+    if (!db.prepare('SELECT 1 FROM customers WHERE id = ?').get(id)) return reply.code(404).send({ error: 'Kunde nicht gefunden' });
+    const b = req.body ?? {};
+    if (!isNum(b.rate) || b.rate < 0 || b.rate > 1000) return reply.code(400).send({ error: 'Stundensatz ungültig' });
+    if (typeof b.valid_from !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(b.valid_from)) return reply.code(400).send({ error: 'Datum „gültig ab“ fehlt' });
+    const uid = b.user_id == null || b.user_id === '' ? null : Number(b.user_id);
+    if (uid != null && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(uid)) return reply.code(400).send({ error: 'Mitarbeiter nicht gefunden' });
+    const info = db.prepare('INSERT INTO customer_rates (customer_id, user_id, rate, valid_from, created_at) VALUES (?, ?, ?, ?, ?)').run(id, uid, b.rate, b.valid_from, Date.now());
+    logChange(db, { item: 'customer_rate', itemId: Number(info.lastInsertRowid), field: 'rate', oldValue: null, newValue: `${b.rate} ab ${b.valid_from}${uid ? ' für ' + uid : ''}`, by: req.user.id });
+    return reply.code(201).send(customerRow(db.prepare('SELECT * FROM customers WHERE id = ?').get(id)));
+  });
+
+  app.delete('/api/customer-rates/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const r = db.prepare('SELECT * FROM customer_rates WHERE id = ?').get(Number(req.params.id));
+    if (!r) return reply.code(404).send({ error: 'Satz nicht gefunden' });
+    logChange(db, { item: 'customer_rate', itemId: r.id, field: 'deleted', oldValue: `${r.rate} ab ${r.valid_from}${r.user_id ? ' für ' + r.user_id : ''}`, newValue: null, by: req.user.id });
+    db.prepare('DELETE FROM customer_rates WHERE id = ?').run(r.id);
+    return customerRow(db.prepare('SELECT * FROM customers WHERE id = ?').get(r.customer_id));
   });
 
   // Löschen nur, wenn nichts mehr daran hängt. Sonst archivieren.

@@ -1,4 +1,4 @@
-import { getSettings } from './db.js';
+import { getSettings, rateAt } from './db.js';
 import { buildReportModel, isDateKey, daysBetween, loadCustomerSegments, renderReportPdf, reportFileName } from './report.js';
 
 export function registerReportRoutes(app, { db, requireAdmin }) {
@@ -16,7 +16,8 @@ export function registerReportRoutes(app, { db, requireAdmin }) {
     const options = b.options ?? {};
     const rate = customer.hourly_rate ?? null;
     const wantsMoney = options.cols?.amount ?? true;
-    if (rate == null && (wantsMoney || options.cols?.rate)) {
+    const hasRates = !!db.prepare('SELECT 1 FROM customer_rates WHERE customer_id = ?').get(customer.id);
+    if (rate == null && !hasRates && (wantsMoney || options.cols?.rate)) {
       return reply.code(400).send({
         error: 'Für diesen Kunden ist noch kein Stundensatz eingetragen. Bitte unter „Kunden und Projekte“ nachtragen oder Satz und Betrag abschalten.',
       });
@@ -40,7 +41,8 @@ export function registerReportRoutes(app, { db, requireAdmin }) {
       segments,
       breaks,
       customer: { name: customer.name, address },
-      rate,
+      rate: rateAt(db, customer.id, null, b.to),
+      rateFor: (userId, day) => rateAt(db, customer.id, userId, day),
       issuer: { name: company.name, email: company.email },
       type,
       from: b.from,

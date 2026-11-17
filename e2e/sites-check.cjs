@@ -27,6 +27,7 @@ let srv;
 
   // Kunde anlegen
   await page.click('button:has-text("Neuer Kunde")');
+  await page.waitForSelector('#k-vorname'); await page.check('input[name=k-art][value=firma]'); await page.uncheck('#k-bs-an');
   await page.fill('#k-firma', 'WEG Lilienstraße'); await page.fill('#k-mail', 'verwaltung@example.org'); await page.fill('#k-satz', '55,5');
   await page.click('dialog button.primary');
   await page.waitForSelector('td:has-text("55,5 €/h")');
@@ -77,6 +78,7 @@ let srv;
 
   // Adresse vom Kunden übernehmen
   await page.click('button:has-text("Neuer Kunde")');
+  await page.waitForSelector('#k-vorname'); await page.check('input[name=k-art][value=firma]'); await page.uncheck('#k-bs-an');
   await page.fill('#k-firma', 'Hausverwaltung Schmidt'); await page.fill('#k-strasse', 'Bürostraße 9'); await page.fill('#k-plz', '80331'); await page.fill('#k-ort', 'München');
   await page.click('dialog button.primary');
   await page.waitForSelector('td:has-text("Bürostraße 9")');
