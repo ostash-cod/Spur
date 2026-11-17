@@ -138,3 +138,12 @@ button[aria-pressed='true'] { background: var(--text); color: #fff; border-color
 .wfootday .warn { color: #8a6d00; }
 .wnote.loose { margin-top: 6px; padding: 4px 6px; background: var(--grau); border-radius: 6px; white-space: pre-line; }
 .wnote-pop { margin: 10px 0 0; padding: 8px 10px; background: var(--grau); border-radius: 8px; white-space: pre-line; font-size: 0.92rem; }
+main.wide { max-width: none; }
+main.wide .wgrid { min-width: 980px; }
+.wblock.small { padding-bottom: 14px; }
+.wblock.tiny { padding: 1px 6px; }
+.wblock .wline1 { display: flex; justify-content: space-between; gap: 6px; white-space: nowrap; overflow: hidden; font-size: 0.75rem; }
+.wblock .wline1 strong { display: inline; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; }
+.wblock strong, .wblock .wsub { overflow: hidden; text-overflow: ellipsis; }
+.wblock.striped strong, .wblock.striped .wline1, .wblock.striped .wfoot span:last-child { background: rgba(255, 255, 255, 0.85); color: #1b1c1e; border-radius: 4px; padding: 0 4px; width: fit-content; }
+.wblock.striped .wsub { display: none; }

@@ -209,6 +209,7 @@ function route() {
   const render = (m) => (pages[page] ?? mitarbeiter)(m, ...args);
   document.querySelectorAll('.menu a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
   const main = $('main');
+  main.classList.toggle('wide', page === 'woche'); // Wochenansicht nutzt die ganze Breite
   main.replaceChildren(h('p', { class: 'sub' }, 'Lädt …'));
   render(main).catch((err) => main.replaceChildren(h('p', { class: 'error' }, err.message)));
 }
@@ -1507,7 +1508,6 @@ async function tagesansicht(main, userId, dateStr) {
 }
 
 // --- Wochenansicht pro Mitarbeiter (Vorbild Clockodo) ---------------------------------
-const WEEK_PX_PER_MIN = 0.9;
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 function mondayOf(d) {
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -1557,23 +1557,32 @@ async function woche(main, userArg, dateStr) {
   const perDay = dates.map((d) => {
     const key = toDateStr(d);
     const list = days.filter((x) => toDateStr(new Date(x.started_at)) === key);
-    const blocks = list.flatMap((x) => buildBlocks(x, siteById).map((b) => ({ ...b, day: x })));
-    const work = list.reduce((a, x) => a + ((x.ended_at ?? Date.now()) - x.started_at), 0)
+    // Ein Tag, der nicht beendet wurde, läuft höchstens bis Mitternacht dieses Tages.
+    const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+    const blocks = list.flatMap((x) => buildBlocks(x, siteById).map((b) => ({ ...b, day: x, end: Math.min(b.end, midnight) }))).filter((b) => b.end > b.start);
+    const work = list.reduce((a, x) => a + (Math.min(x.ended_at ?? Date.now(), midnight) - x.started_at), 0)
       - blocks.filter((b) => b.type === 'site' && (b.seg.kind === 'break' || b.seg.kind === 'private')).reduce((a, b) => a + (b.end - b.start), 0)
       - blocks.filter((b) => b.isPrivate).reduce((a, b) => a + (b.end - b.start), 0);
     const money = blocks.filter(billableBlock).reduce((a, b) => a + ((b.end - b.start) / 3600000) * (rateOf(b.site, key) ?? 0), 0);
     const submitted = sheets.some((sh) => sh.date === key);
     return { d, key, list, blocks, work: Math.max(0, work), money, submitted,
       start: list.length ? Math.min(...list.map((x) => x.started_at)) : null,
-      end: list.length ? Math.max(...list.map((x) => x.ended_at ?? Date.now())) : null };
+      open: list.some((x) => x.ended_at == null),
+      end: list.length ? Math.min(midnight, Math.max(...list.map((x) => x.ended_at ?? Date.now()))) : null };
   });
 
   // Sichtbarer Zeitbereich: mindestens 7 bis 17 Uhr, sonst so weit wie gearbeitet wurde.
   const hourOf = (ms) => { const x = new Date(ms); return x.getHours() + x.getMinutes() / 60; };
   let h0 = 7, h1 = 17;
-  for (const pd of perDay) for (const b of pd.blocks) { h0 = Math.min(h0, Math.floor(hourOf(b.start))); h1 = Math.max(h1, Math.ceil(hourOf(b.end))); }
-  const colH = (h1 - h0) * 60 * WEEK_PX_PER_MIN;
-  const yOf = (ms, d) => ((ms - new Date(d.getFullYear(), d.getMonth(), d.getDate(), h0).getTime()) / 60000) * WEEK_PX_PER_MIN;
+  for (const pd of perDay) for (const b of pd.blocks) {
+    h0 = Math.min(h0, Math.floor(hourOf(b.start)));
+    const endH = b.end >= new Date(pd.d.getFullYear(), pd.d.getMonth(), pd.d.getDate() + 1).getTime() ? 24 : Math.ceil(hourOf(b.end));
+    h1 = Math.max(h1, endH);
+  }
+  // So hoch, dass der Arbeitstag auf den Bildschirm passt, aber kurze Abschnitte noch lesbar sind.
+  const PXM = Math.min(1.8, Math.max(1.1, (window.innerHeight - 300) / ((h1 - h0) * 60)));
+  const colH = (h1 - h0) * 60 * PXM;
+  const yOf = (ms, d) => ((ms - new Date(d.getFullYear(), d.getMonth(), d.getDate(), h0).getTime()) / 60000) * PXM;
 
   const noteFor = (key, siteId) => notes.find((n) => n.date === key && (n.site_id ?? null) === (siteId ?? null) && n.kind !== 'material');
   // Jedes Foto gehört zu genau einem Block: zu dem, in dessen Zeit es aufgenommen wurde,
@@ -1590,9 +1599,13 @@ async function woche(main, userArg, dateStr) {
   }
   const photosFor = (b) => photos.filter((p) => photoHome.get(p.id) === b);
 
-  const blockEl = (b, pd, shownNotes) => {
-    const top = Math.max(0, Math.round(yOf(b.start, pd.d)));
-    const height = Math.max(18, Math.round(((b.end - b.start) / 60000) * WEEK_PX_PER_MIN) - 2);
+  // minTop: Unterkante des Blocks davor. Sehr kurze Blöcke werden mindestens 16 px hoch und schieben sich nicht übereinander.
+  const blockEl = (b, pd, shownNotes, minTop = 0) => {
+    const realTop = Math.max(0, Math.round(yOf(b.start, pd.d)));
+    const realBottom = Math.round(yOf(b.end, pd.d)) - 2;
+    const top = Math.max(realTop, minTop);
+    const height = Math.max(16, realBottom - top);
+    const size = height < 34 ? 'tiny' : height < 60 ? 'small' : '';
     const dur = fmtH(b.end - b.start);
     let bg, fg = '#1B1C1E', title, sub = '';
     if (b.type === 'travel') {
@@ -1615,11 +1628,16 @@ async function woche(main, userArg, dateStr) {
       if (note) shownNotes.add(b.site.id);
     }
     const nPhotos = b.type === 'site' && b.site && !b.site.system ? photosFor(b).length : 0;
-    const el = h('div', { class: 'wblock', tabindex: 0, role: 'button', style: `top:${top}px;height:${height}px;background:${bg};color:${fg}` },
-      h('strong', {}, title),
-      sub ? h('div', { class: 'wsub' }, sub) : null,
-      note ? h('div', { class: 'wnote' }, note.text) : null,
-      h('div', { class: 'wfoot' }, h('span', {}, nPhotos ? `📷 ${nPhotos}` : ''), h('span', {}, dur)),
+    const stripe = bg.startsWith('repeating');
+    const el = h('div', { class: `wblock ${size}${stripe ? ' striped' : ''}`, tabindex: 0, role: 'button', title: `${title}${sub ? ' · ' + sub : ''} · ${fmtTime(b.start)}–${fmtTime(b.end)} · ${dur}`, style: `top:${top}px;height:${height}px;background:${bg};color:${fg}` },
+      size === 'tiny'
+        ? h('div', { class: 'wline1' }, h('strong', {}, title), h('span', {}, dur))
+        : [
+          h('strong', {}, title),
+          sub && size !== 'small' ? h('div', { class: 'wsub' }, sub) : null,
+          note && size !== 'small' ? h('div', { class: 'wnote' }, note.text) : null,
+          h('div', { class: 'wfoot' }, h('span', {}, nPhotos ? `📷 ${nPhotos}` : ''), h('span', {}, dur)),
+        ],
     );
     el.onclick = () => blockDialog(b, pd, note, nPhotos);
     el.onkeydown = (e) => { if (e.key === 'Enter') blockDialog(b, pd, note, nPhotos); };
@@ -1784,11 +1802,17 @@ async function woche(main, userArg, dateStr) {
   const totalMoney = perDay.reduce((a, p) => a + p.money, 0);
   const today = toDateStr(new Date());
 
-  const hoursCol = h('div', { class: 'whours', style: `height:${colH}px` }, ...[...Array(h1 - h0 + 1)].map((_, i) => h('span', { style: `top:${i * 60 * WEEK_PX_PER_MIN}px` }, `${pad2(h0 + i)}:00`)));
+  const hoursCol = h('div', { class: 'whours', style: `height:${colH}px` }, ...[...Array(h1 - h0 + 1)].map((_, i) => h('span', { style: `top:${i * 60 * PXM}px` }, `${pad2(h0 + i)}:00`)));
   const cols = perDay.map((pd, i) => {
     const shown = new Set();
-    const col = h('div', { class: 'wcol', style: `height:${colH}px` }, ...[...Array(h1 - h0)].map((_, k) => h('div', { class: 'wline', style: `top:${(k + 1) * 60 * WEEK_PX_PER_MIN}px` })));
-    for (const b of pd.blocks) col.append(blockEl(b, pd, shown));
+    const col = h('div', { class: 'wcol', style: `height:${colH}px` }, ...[...Array(h1 - h0)].map((_, k) => h('div', { class: 'wline', style: `top:${(k + 1) * 60 * PXM}px` })));
+    let bottom = 0;
+    for (const b of pd.blocks) {
+      const el = blockEl(b, pd, shown, bottom);
+      col.append(el);
+      bottom = parseInt(el.style.top, 10) + parseInt(el.style.height, 10) + 2;
+    }
+    if (bottom > colH) col.style.height = `${bottom}px`;
     const loose = notes.filter((n) => n.date === pd.key && n.site_id == null && n.kind !== 'material');
     return { pd, i, col, loose };
   });
@@ -1813,7 +1837,7 @@ async function woche(main, userArg, dateStr) {
         ...cols.map(({ pd, loose }) => h('div', { class: 'wfootday' },
           pd.list.length ? [
             h('strong', {}, fmtH(pd.work)),
-            h('div', {}, `${fmtTime(pd.start)} – ${fmtTime(pd.end)}`),
+            h('div', {}, `${fmtTime(pd.start)} – ${pd.open ? 'nicht beendet' : fmtTime(pd.end)}`),
             pd.money ? h('div', {}, fmtEuro(pd.money)) : null,
             h('div', { class: pd.submitted ? 'hint ok' : 'hint warn' }, pd.submitted ? 'abgegeben ✓' : 'noch nicht abgegeben'),
           ] : h('span', { class: 'hint' }, '–'),
