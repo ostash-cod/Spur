@@ -652,18 +652,27 @@ async function kunden(main) {
   const siteRows = visibleSites.filter((s) => s.kind !== 'haendler').map((s) => rowFor(s, true));
   const haendlerRows = visibleSites.filter((s) => s.kind === 'haendler').map((s) => rowFor(s, false));
 
-  const customerRows = visibleCustomers.map((c) =>
-    h(
+  const customerSearch = h('input', { type: 'search', placeholder: 'Suchen: Name, Nummer, Ort, Telefon', 'aria-label': 'Kunden suchen', style: 'max-width:320px', oninput: () => filterCustomers() });
+  const customerRows = visibleCustomers.map((c) => {
+    const row = h(
       'tr',
       { class: c.archived ? 'inaktiv' : '' },
-      h('td', {}, h('strong', {}, c.name)),
-      h('td', {}, c.address ?? ''),
-      h('td', {}, c.email ?? ''),
-      h('td', {}, c.hourly_rate == null ? '–' : `${showNum(c.hourly_rate)} €/h`),
+      h('td', {}, c.customer_no ?? ''),
+      h('td', {},
+        h('strong', {}, c.name),
+        h('div', { class: 'hint', style: 'margin:0' }, [c.kind === 'privat' ? 'Privatperson' : 'Firma', c.contact_person ? `Ansprechpartner: ${c.contact_person}` : null].filter(Boolean).join(' · ')),
+      ),
+      h('td', {}, c.street ?? (c.zip || c.city ? '' : c.address ?? ''), c.zip || c.city ? h('div', {}, [c.zip, c.city].filter(Boolean).join(' ')) : null),
+      h('td', {},
+        c.phone ? h('div', { style: 'white-space:nowrap' }, h('a', { href: `tel:${c.phone.replace(/[^0-9+]/g, '')}` }, c.phone)) : null,
+        c.email ? h('div', { style: 'word-break:break-all' }, h('a', { href: `mailto:${c.email}` }, c.email)) : null),
+      h('td', { style: 'white-space:nowrap' }, c.hourly_rate == null ? '–' : `${showNum(c.hourly_rate)} €/h`),
+      h('td', {}, String(c.site_count ?? 0)),
       h(
         'td',
-        { class: 'actions' },
+        { class: 'actions', style: 'min-width:200px' },
         h('button', { class: 'small', onclick: () => customerDialog(c) }, 'Bearbeiten'),
+        c.archived ? null : h('button', { class: 'small', onclick: () => siteDialog(null, customers, 'baustelle', { customer_id: c.id, address: c.address ?? '' }) }, '+ Baustelle'),
         h(
           'button',
           {
@@ -677,12 +686,28 @@ async function kunden(main) {
         ),
         h('button', { class: 'small danger', onclick: () => deleteWithConfirm('Kunde', c, `/customers/${c.id}`) }, 'Löschen'),
       ),
-    ),
-  );
+    );
+    row.dataset.search = [c.name, c.customer_no, c.city, c.zip, c.street, c.phone, c.email, c.contact_person].filter(Boolean).join(' ').toLowerCase();
+    return row;
+  });
+  const filterCustomers = () => {
+    const q = customerSearch.value.trim().toLowerCase();
+    for (const r of customerRows) r.style.display = !q || r.dataset.search.includes(q) ? '' : 'none';
+  };
 
   main.replaceChildren(
     h('h1', {}, 'Kunden und Projekte'),
-    h('p', { class: 'sub' }, 'Baustellen mit Adresse und Farbe. Aktive Baustellen erscheinen in der Handy-App als Kacheln und werden dort automatisch erkannt.'),
+    h('p', { class: 'sub' }, 'Kunden mit ihren Baustellen. Aktive Baustellen erscheinen in der Handy-App als Kacheln und werden dort automatisch erkannt.'),
+    h(
+      'div',
+      { class: 'card' },
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Kunden'), h('button', { class: 'primary', onclick: () => customerDialog(null) }, 'Neuer Kunde')),
+      customerRows.length ? customerSearch : null,
+      customerRows.length
+        ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Nr.'), h('th', {}, 'Kunde'), h('th', {}, 'Adresse'), h('th', {}, 'Kontakt'), h('th', {}, 'Satz'), h('th', {}, 'Baust.'), h('th', {}, ''))), h('tbody', {}, customerRows))
+        : h('p', { class: 'hint' }, 'Noch kein Kunde angelegt. Mit „Neuer Kunde“ legst du Firmen oder Privatpersonen an, mit „+ Baustelle“ hängst du eine Baustelle an den Kunden.'),
+      h('p', { class: 'hint' }, 'Löschen geht nur, wenn nichts mehr daran hängt: Ein Kunde ohne Baustellen, eine Baustelle ohne gebuchte Zeiten. Sonst archivieren.'),
+    ),
     h(
       'div',
       { class: 'card' },
@@ -698,15 +723,6 @@ async function kunden(main) {
       haendlerRows.length
         ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Händler'), h('th', {}, 'Adresse'), h('th', {}, 'Erkennung'), h('th', {}, 'Aktiv'), h('th', {}, ''))), h('tbody', {}, haendlerRows))
         : h('p', { class: 'hint' }, 'Noch kein Händler. Händler legst du am Handy an, wenn du dort bist („Ort hier speichern“), oder hier. Fahrten von einer Baustelle zum Händler und zurück gelten als Materialfahrt.'),
-    ),
-    h(
-      'div',
-      { class: 'card' },
-      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Kunden'), h('button', { onclick: () => customerDialog(null) }, 'Neuer Kunde')),
-      customerRows.length
-        ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Kunde'), h('th', {}, 'Adresse'), h('th', {}, 'E-Mail'), h('th', {}, 'Stundensatz'), h('th', {}, ''))), h('tbody', {}, customerRows))
-        : h('p', { class: 'hint' }, 'Noch kein Kunde angelegt. Ein Kunde ist optional, eine Baustelle geht auch ohne.'),
-      h('p', { class: 'hint' }, 'Löschen geht nur, wenn nichts mehr daran hängt: Ein Kunde ohne Baustellen, eine Baustelle ohne gebuchte Zeiten. Sonst archivieren.'),
     ),
     h(
       'label',
@@ -928,21 +944,50 @@ function extraPointsBox(site) {
 }
 
 function customerDialog(c) {
-  const name = h('input', { id: 'c-name2', value: c?.name ?? '', style: 'max-width:none' });
-  const address = h('input', { id: 'c-addr', value: c?.address ?? '', placeholder: 'Straße Nr, PLZ Ort (Büro oder Rechnungsadresse)', style: 'max-width:none' });
-  const email = h('input', { id: 'c-mail', value: c?.email ?? '', type: 'email', style: 'max-width:none' });
-  const rate = h('input', { id: 'c-rate', value: showNum(c?.hourly_rate), inputmode: 'decimal', placeholder: 'zum Beispiel 55' });
+  // Ältere Kunden haben nur einen Namen: der gilt dann als Firmenname.
+  const v = { ...(c ?? { kind: 'firma', country: 'Deutschland' }) };
+  if (c && !v.company && !v.first_name && !v.last_name) v.company = c.name;
+  const inp = (id, value, extra = {}) => h('input', { id, value: value ?? '', style: 'max-width:none', ...extra });
+  const field = (label, el, grow = 1) => h('div', { style: `flex:${grow} 1 120px;min-width:0` }, h('label', { for: el.id }, label), el);
+  const f = {
+    company: inp('k-firma', v.company, { placeholder: 'zum Beispiel Hausverwaltung Berg GmbH' }),
+    contact_person: inp('k-ansprech', v.contact_person),
+    salutation: h('select', { id: 'k-anrede' }, ...['', 'Frau', 'Herr', 'Familie', 'Divers'].map((x) => h('option', { value: x, selected: (v.salutation ?? '') === x }, x || '–'))),
+    first_name: inp('k-vorname', v.first_name),
+    last_name: inp('k-nachname', v.last_name),
+    street: inp('k-strasse', v.street, { placeholder: 'Straße und Hausnummer' }),
+    zip: inp('k-plz', v.zip, { inputmode: 'numeric', maxlength: 10 }),
+    city: inp('k-ort', v.city),
+    country: inp('k-land', v.country ?? 'Deutschland'),
+    phone: inp('k-tel', v.phone, { type: 'tel' }),
+    email: inp('k-mail', v.email, { type: 'email' }),
+    customer_no: inp('k-nr', v.customer_no, { placeholder: 'wie in LexOffice' }),
+    hourly_rate: inp('k-satz', showNum(v.hourly_rate), { inputmode: 'decimal', placeholder: 'zum Beispiel 55' }),
+    note: h('textarea', { id: 'k-notiz', rows: 2, style: 'width:100%;max-width:none' }, v.note ?? ''),
+  };
+  let kind = v.kind === 'privat' ? 'privat' : 'firma';
+  const kindBtn = (k, label) => h('button', { type: 'button', class: 'small', 'aria-pressed': String(kind === k), onclick: () => { kind = k; showKind(); } }, label);
+  const kinds = [kindBtn('firma', 'Firma'), kindBtn('privat', 'Privatperson')];
+  const firmaBox = h('div', {}, h('div', { class: 'row' }, field('Firmenname', f.company, 2), field('Ansprechpartner (optional)', f.contact_person, 2)));
+  const personBox = h('div', {}, h('div', { class: 'row' }, field('Anrede', f.salutation, 1), field('Vorname', f.first_name, 2), field('Nachname', f.last_name, 2)));
+  const showKind = () => {
+    kinds[0].setAttribute('aria-pressed', String(kind === 'firma'));
+    kinds[1].setAttribute('aria-pressed', String(kind === 'privat'));
+    firmaBox.style.display = kind === 'firma' ? '' : 'none';
+    personBox.style.display = kind === 'privat' ? '' : 'none';
+  };
   const err = h('p', { class: 'error' });
   const d = openDialog(
     h('h2', {}, c ? 'Kunde bearbeiten' : 'Neuer Kunde'),
-    h('label', { for: 'c-name2' }, 'Name'),
-    name,
-    h('label', { for: 'c-addr' }, 'Adresse des Kunden'),
-    address,
-    h('label', { for: 'c-mail' }, 'E-Mail (für den Versand der Stundennachweise)'),
-    email,
-    h('label', { for: 'c-rate' }, 'Stundensatz in Euro'),
-    rate,
+    h('div', { class: 'actions', style: 'margin:0 0 6px' }, ...kinds),
+    firmaBox,
+    personBox,
+    h('div', { class: 'row' }, field('Straße und Hausnummer', f.street, 3)),
+    h('div', { class: 'row' }, field('PLZ', f.zip, 1), field('Ort', f.city, 2), field('Land', f.country, 1)),
+    h('div', { class: 'row' }, field('Telefon', f.phone, 1), field('E-Mail (für Stundennachweise)', f.email, 2)),
+    h('div', { class: 'row' }, field('Kundennummer', f.customer_no, 1), field('Stundensatz in Euro', f.hourly_rate, 1)),
+    h('label', { for: 'k-notiz' }, 'Notiz (optional)'),
+    f.note,
     err,
     h(
       'div',
@@ -952,10 +997,14 @@ function customerDialog(c) {
         {
           class: 'primary',
           onclick: async () => {
-            const r = num(rate.value);
+            const r = num(f.hourly_rate.value);
             if (Number.isNaN(r)) return (err.textContent = 'Der Stundensatz muss eine Zahl sein.');
+            const body = { kind, hourly_rate: r };
+            for (const k of ['contact_person', 'company', 'salutation', 'first_name', 'last_name', 'street', 'zip', 'city', 'country', 'phone', 'email', 'customer_no', 'note']) body[k] = f[k].value.trim();
+            if (kind === 'firma') Object.assign(body, { salutation: '', first_name: '', last_name: '' });
+            else Object.assign(body, { company: '', contact_person: '' });
             try {
-              await api(c ? `/customers/${c.id}` : '/customers', { method: c ? 'PATCH' : 'POST', body: { name: name.value, address: address.value, email: email.value, hourly_rate: r } });
+              await api(c ? `/customers/${c.id}` : '/customers', { method: c ? 'PATCH' : 'POST', body });
               d.close();
               route();
             } catch (ex) {
@@ -968,7 +1017,10 @@ function customerDialog(c) {
       h('button', { onclick: () => d.close() }, 'Abbrechen'),
     ),
   );
-  name.focus();
+  showKind();
+  // Neue Kunden bekommen die nächste freie Kundennummer als Vorschlag.
+  if (!c) api('/customers/next-number').then((n) => { if (!f.customer_no.value) f.customer_no.value = n.customer_no; }).catch(() => {});
+  (kind === 'firma' ? f.company : f.first_name).focus();
 }
 
 // --- Tagesansicht ----------------------------------------------------------

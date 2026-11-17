@@ -27,7 +27,7 @@ let srv;
 
   // Kunde anlegen
   await page.click('button:has-text("Neuer Kunde")');
-  await page.fill('#c-name2', 'WEG Lilienstraße'); await page.fill('#c-mail', 'verwaltung@example.org'); await page.fill('#c-rate', '55,5');
+  await page.fill('#k-firma', 'WEG Lilienstraße'); await page.fill('#k-mail', 'verwaltung@example.org'); await page.fill('#k-satz', '55,5');
   await page.click('dialog button.primary');
   await page.waitForSelector('td:has-text("55,5 €/h")');
   console.log('Kunde angelegt: ok');
@@ -77,7 +77,7 @@ let srv;
 
   // Adresse vom Kunden übernehmen
   await page.click('button:has-text("Neuer Kunde")');
-  await page.fill('#c-name2', 'Hausverwaltung Schmidt'); await page.fill('#c-addr', 'Bürostraße 9, 80331 München');
+  await page.fill('#k-firma', 'Hausverwaltung Schmidt'); await page.fill('#k-strasse', 'Bürostraße 9'); await page.fill('#k-plz', '80331'); await page.fill('#k-ort', 'München');
   await page.click('dialog button.primary');
   await page.waitForSelector('td:has-text("Bürostraße 9")');
   await page.click('button:has-text("Neue Baustelle")');

@@ -401,3 +401,58 @@ test('Handy: Name ändern und Kunde nachträglich anlegen', async () => {
   const customers = (await call('GET', '/api/customers', at)).json();
   assert.equal(customers.filter((c) => c.name.startsWith('Stauffenbergstr')).length, 1);
 });
+
+test('Kunden wie in LexOffice: Firma, Privatperson, Kundennummer', async () => {
+  const { call, at } = await setup();
+  const next = (await call('GET', '/api/customers/next-number', at)).json();
+  assert.equal(next.customer_no, '10000');
+  const firma = (await call('POST', '/api/customers', at, {
+    kind: 'firma', company: 'Hausverwaltung Berg GmbH', contact_person: 'Frau Huber', street: 'Hauptstraße 1', zip: '82343', city: 'Pöcking',
+    country: 'Deutschland', phone: '08157 123', email: 'info@example.org', customer_no: '10000', hourly_rate: 55,
+  })).json();
+  assert.equal(firma.name, 'Hausverwaltung Berg GmbH');
+  assert.equal(firma.address, 'Hauptstraße 1, 82343 Pöcking');
+  assert.equal(firma.contact_person, 'Frau Huber');
+  assert.equal((await call('GET', '/api/customers/next-number', at)).json().customer_no, '10001');
+
+  const privat = (await call('POST', '/api/customers', at, { kind: 'privat', salutation: 'Frau', first_name: 'Anna', last_name: 'Schröder', street: 'Seestraße 5', zip: '82319', city: 'Starnberg' })).json();
+  assert.equal(privat.name, 'Anna Schröder');
+  assert.equal(privat.address, 'Seestraße 5, 82319 Starnberg');
+
+  // Fehler
+  assert.equal((await call('POST', '/api/customers', at, { kind: 'privat', street: 'x' })).statusCode, 400, 'Name fehlt');
+  assert.equal((await call('POST', '/api/customers', at, { kind: 'firma', company: 'X', customer_no: '10000' })).statusCode, 400, 'Nummer doppelt');
+  assert.equal((await call('POST', '/api/customers', at, { kind: 'firma', company: 'X', email: 'kein-at' })).statusCode, 400);
+  assert.equal((await call('POST', '/api/customers', at, { kind: 'kunde', company: 'X' })).statusCode, 400);
+
+  // Ändern: Name und Adresse folgen den Feldern, die eigene Nummer bleibt erlaubt
+  const upd = (await call('PATCH', `/api/customers/${privat.id}`, at, { last_name: 'Schröder-Maier', city: 'Tutzing', zip: '82327' })).json();
+  assert.equal(upd.name, 'Anna Schröder-Maier');
+  assert.equal(upd.address, 'Seestraße 5, 82327 Tutzing');
+  assert.equal((await call('PATCH', `/api/customers/${firma.id}`, at, { customer_no: '10000', archived: true })).json().archived, true);
+
+  // Baustelle mit Kunde: Zahl der Baustellen und Name in der Baustelle
+  const site = (await call('POST', '/api/sites', at, { name: 'Seestraße 5', customer_id: privat.id })).json();
+  assert.equal(site.customer_name, 'Anna Schröder-Maier');
+  const list = (await call('GET', '/api/customers', at)).json();
+  assert.equal(list.find((c) => c.id === privat.id).site_count, 1);
+});
+
+test('Bestehende Kunden: Adresse wird beim Update in Straße, PLZ und Ort aufgeteilt', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const file = join(mkdtempSync(join(tmpdir(), 'spur-kunden-')), 'alt.db');
+  // Alte Datenbank wie vor diesem Update: Kunden nur mit Name und einer Adresszeile.
+  const old = new DatabaseSync(file);
+  old.exec(`CREATE TABLE customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT, hourly_rate REAL, archived INTEGER NOT NULL DEFAULT 0, created_at TEXT, address TEXT);
+    INSERT INTO customers (name, address) VALUES ('WEG Lilienstraße', 'Lilienstraße 77, 81669 München'), ('Familie Meier', 'Dorfstraße 5, Pöcking'), ('Ohne', NULL);`);
+  old.close();
+  const db = openDb(file);
+  const rows = db.prepare('SELECT name, kind, company, street, zip, city, address FROM customers ORDER BY id').all().map((r) => ({ ...r }));
+  assert.deepEqual(rows[0], { name: 'WEG Lilienstraße', kind: 'firma', company: 'WEG Lilienstraße', street: 'Lilienstraße 77', zip: '81669', city: 'München', address: 'Lilienstraße 77, 81669 München' });
+  assert.equal(rows[1].street, 'Dorfstraße 5, Pöcking', 'ohne PLZ bleibt die Zeile als Straße stehen');
+  assert.equal(rows[1].zip, null);
+  assert.equal(rows[2].street, null);
+});

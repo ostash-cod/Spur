@@ -127,6 +127,7 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
   const SITE_SELECT = `SELECT s.*, c.name AS customer_name FROM sites s LEFT JOIN customers c ON c.id = s.customer_id`;
 
   // --- Kunden (nur Chef) ---
+  const CUSTOMER_FIELDS = ['salutation', 'first_name', 'last_name', 'company', 'contact_person', 'street', 'zip', 'city', 'country', 'phone', 'customer_no', 'note'];
   const customerRow = (r) => ({
     id: r.id,
     name: r.name,
@@ -134,22 +135,61 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     email: r.email,
     hourly_rate: r.hourly_rate,
     archived: !!r.archived,
+    kind: r.kind ?? 'firma',
+    ...Object.fromEntries(CUSTOMER_FIELDS.map((f) => [f, r[f] ?? null])),
+    site_count: db.prepare('SELECT COUNT(*) AS n FROM sites WHERE customer_id = ?').get(r.id).n,
   });
+
+  /**
+   * Prüft und vereinheitlicht einen Kunden. [row] = bisheriger Stand (bei Änderung).
+   * Mit den neuen Feldern werden Name und Adresse daraus gebildet, sonst gelten name und address wie bisher.
+   */
+  function cleanCustomer(b, row = {}) {
+    const pick = (f, max = 120) => (b[f] === undefined ? row[f] ?? null : text(b[f], max) || null);
+    const c = { kind: b.kind === undefined ? row.kind ?? 'firma' : b.kind };
+    if (!['firma', 'privat'].includes(c.kind)) throw new Error('Art muss Firma oder Privatperson sein');
+    for (const f of CUSTOMER_FIELDS) c[f] = pick(f, f === 'note' ? 1000 : 120);
+    if (c.zip && !/^[0-9A-Za-z -]{3,10}$/.test(c.zip)) throw new Error('PLZ ungültig');
+    if (c.customer_no && !/^[0-9A-Za-z-]{1,20}$/.test(c.customer_no)) throw new Error('Kundennummer: nur Ziffern, Buchstaben und Bindestrich');
+    const person = [c.first_name, c.last_name].filter(Boolean).join(' ');
+    const structured = CUSTOMER_FIELDS.some((f) => b[f] !== undefined) || b.kind !== undefined;
+    c.name = (structured ? (c.kind === 'firma' ? c.company : person) || c.company || person : null) || (b.name === undefined ? row.name : text(b.name));
+    if (!c.name) throw new Error(c.kind === 'privat' ? 'Vor- oder Nachname fehlt' : 'Firmenname fehlt');
+    const place = [c.zip, c.city].filter(Boolean).join(' ');
+    const built = [c.street, place].filter(Boolean).join(', ');
+    c.address = structured && built ? built : b.address === undefined ? row.address ?? null : text(b.address, 300);
+    c.email = b.email === undefined ? row.email ?? null : text(b.email) || null;
+    if (c.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email)) throw new Error('E-Mail ungültig');
+    c.hourly_rate = b.hourly_rate === undefined ? row.hourly_rate ?? null : b.hourly_rate;
+    if (c.hourly_rate != null && (!isNum(c.hourly_rate) || c.hourly_rate < 0)) throw new Error('Stundensatz ungültig');
+    if (c.customer_no && db.prepare('SELECT 1 FROM customers WHERE customer_no = ? AND id != ?').get(c.customer_no, row.id ?? -1)) {
+      throw new Error(`Die Kundennummer ${c.customer_no} gibt es schon`);
+    }
+    return c;
+  }
+
+  const saveCols = ['name', 'address', 'email', 'hourly_rate', 'kind', ...CUSTOMER_FIELDS];
 
   app.get('/api/customers', { preHandler: requireAdmin }, async () =>
     db.prepare('SELECT * FROM customers ORDER BY archived, name COLLATE NOCASE').all().map(customerRow),
   );
 
+  // Vorschlag für die nächste Kundennummer (wie in LexOffice ab 10000).
+  app.get('/api/customers/next-number', { preHandler: requireAdmin }, async () => {
+    const nums = db.prepare('SELECT customer_no FROM customers WHERE customer_no IS NOT NULL').all().map((r) => Number(r.customer_no)).filter(Number.isInteger);
+    return { customer_no: String(nums.length ? Math.max(...nums) + 1 : 10000) };
+  });
+
   app.post('/api/customers', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = req.body ?? {};
-    const name = text(b.name);
-    if (!name) return reply.code(400).send({ error: 'Name fehlt' });
-    if (b.hourly_rate != null && (!isNum(b.hourly_rate) || b.hourly_rate < 0)) {
-      return reply.code(400).send({ error: 'Stundensatz ungültig' });
+    let c;
+    try {
+      c = cleanCustomer(req.body ?? {});
+    } catch (err) {
+      return reply.code(400).send({ error: err.message });
     }
     const info = db
-      .prepare('INSERT INTO customers (name, address, email, hourly_rate) VALUES (?, ?, ?, ?)')
-      .run(name, text(b.address, 300), text(b.email), b.hourly_rate ?? null);
+      .prepare(`INSERT INTO customers (${saveCols.join(', ')}) VALUES (${saveCols.map(() => '?').join(', ')})`)
+      .run(...saveCols.map((k) => c[k] ?? null));
     return reply.code(201).send(customerRow(db.prepare('SELECT * FROM customers WHERE id = ?').get(Number(info.lastInsertRowid))));
   });
 
@@ -158,15 +198,14 @@ export function registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchIm
     const row = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
     if (!row) return reply.code(404).send({ error: 'Kunde nicht gefunden' });
     const b = req.body ?? {};
-    const name = b.name === undefined ? row.name : text(b.name);
-    if (!name) return reply.code(400).send({ error: 'Name fehlt' });
-    const rate = b.hourly_rate === undefined ? row.hourly_rate : b.hourly_rate;
-    if (rate != null && (!isNum(rate) || rate < 0)) return reply.code(400).send({ error: 'Stundensatz ungültig' });
-    db.prepare('UPDATE customers SET name = ?, address = ?, email = ?, hourly_rate = ?, archived = ? WHERE id = ?').run(
-      name,
-      b.address === undefined ? row.address : text(b.address, 300),
-      b.email === undefined ? row.email : text(b.email),
-      rate ?? null,
+    let c;
+    try {
+      c = cleanCustomer(b, row);
+    } catch (err) {
+      return reply.code(400).send({ error: err.message });
+    }
+    db.prepare(`UPDATE customers SET ${saveCols.map((k) => `${k} = ?`).join(', ')}, archived = ? WHERE id = ?`).run(
+      ...saveCols.map((k) => c[k] ?? null),
       b.archived === undefined ? row.archived : b.archived ? 1 : 0,
       id,
     );

@@ -193,6 +193,14 @@ export function openDb(path = ':memory:') {
   if (!hasColumn('segments', 'activity')) db.exec('ALTER TABLE segments ADD COLUMN activity TEXT');
   if (!hasColumn('segments', 'billing')) db.exec('ALTER TABLE segments ADD COLUMN billing TEXT');
   if (!hasColumn('sites', 'kind')) db.exec("ALTER TABLE sites ADD COLUMN kind TEXT NOT NULL DEFAULT 'baustelle'");
+  // Kunden wie in LexOffice: Firma oder Privatperson, Adresse in einzelnen Feldern, Kundennummer.
+  // name und address bleiben als Anzeige erhalten und werden aus diesen Feldern zusammengesetzt.
+  for (const col of ['kind', 'salutation', 'first_name', 'last_name', 'company', 'contact_person', 'street', 'zip', 'city', 'country', 'phone', 'customer_no', 'note']) {
+    if (!hasColumn('customers', col)) {
+      db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
+      if (col === 'note') splitOldAddresses(db);
+    }
+  }
   // Testmodus mit Karte: nur für den Chef, nur als Schalter. Dann schickt sein Handy den Weg an den Server.
   if (!hasColumn('users', 'gps_test')) db.exec('ALTER TABLE users ADD COLUMN gps_test INTEGER NOT NULL DEFAULT 0');
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
@@ -203,6 +211,15 @@ export function openDb(path = ':memory:') {
   db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run('points_policy_since', JSON.stringify(Date.now()));
   ensureSystemSites(db);
   return db;
+}
+
+/** Bestehende Kunden: „Straße Nr, PLZ Ort“ in einzelne Felder aufteilen, wenn es eindeutig geht. Name wird Firmenname. */
+function splitOldAddresses(db) {
+  const upd = db.prepare("UPDATE customers SET kind = 'firma', company = ?, street = ?, zip = ?, city = ?, country = 'Deutschland' WHERE id = ?");
+  for (const c of db.prepare('SELECT id, name, address FROM customers').all()) {
+    const m = String(c.address ?? '').match(/^\s*(.+?)\s*,\s*(\d{5})\s+(.+?)\s*$/);
+    upd.run(c.name, m ? m[1] : c.address ?? null, m ? m[2] : null, m ? m[3] : null, c.id);
+  }
 }
 
 /** Darf dieser Benutzer GPS-Punkte an den Server schicken? Nur im Testmodus des Chefs oder mit Variante B. */

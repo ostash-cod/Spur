@@ -112,3 +112,4 @@ details summary { cursor: pointer; color: var(--text-leise); padding: 4px 0; }
 .timeline .block.clickable { cursor: pointer; }
 .timeline .block.clickable:hover { outline: 2px solid #1B1C1E; }
 .timeline .block.striped strong, .timeline .block.striped .small { background: rgba(245, 196, 0, 0.92); color: #1B1C1E; padding: 0 5px; border-radius: 4px; width: fit-content; }
+button[aria-pressed='true'] { background: var(--text); color: #fff; border-color: var(--text); }
