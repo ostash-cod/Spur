@@ -352,6 +352,7 @@ async function berichte(main) {
       } else {
         frame.src = blobUrl;
         frame.style.display = 'block';
+        previewBox.style.display = 'block';
         status.textContent = '';
       }
     } catch (ex) {
@@ -359,6 +360,29 @@ async function berichte(main) {
       status.textContent = ex.message;
     }
   };
+
+  // Vorschau mit Kreuz zum Schließen. Ist sie offen, aktualisiert sie sich bei jeder Änderung der Haken und Felder.
+  const closePreview = () => {
+    previewBox.style.display = 'none';
+    frame.removeAttribute('src');
+    formCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const previewBox = h(
+    'div',
+    { class: 'card', style: 'display:none;padding-top:10px' },
+    h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:8px' },
+      h('h2', { style: 'margin:0' }, 'Vorschau'),
+      h('button', { type: 'button', class: 'small', 'aria-label': 'Vorschau schließen', onclick: closePreview }, '✕ Vorschau schließen'),
+    ),
+    frame,
+  );
+  let refreshTimer = null;
+  const refreshIfOpen = (e) => {
+    if (previewBox.style.display === 'none' || e.target.closest?.('.actions')) return;
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => run(false), 400);
+  };
+  let formCard;
 
   main.replaceChildren(
     h('h1', {}, 'Berichte'),
@@ -386,8 +410,10 @@ async function berichte(main) {
       ),
       status,
     ),
-    frame,
+    previewBox,
   );
+  formCard = main.querySelector('.card');
+  formCard.addEventListener('change', refreshIfOpen);
 }
 const statistik = placeholder('Statistik', 'Stunden und Umsatz pro Monat, Kunde und Projekt.', 'Schritt 7');
 

@@ -34,6 +34,15 @@ const ok = (cond, msg) => { console.log(cond ? 'OK  ' : 'FEHLER', msg); if (!con
   ok(res.status() === 200 && res.headers()['content-type'] === 'application/pdf', 'Vorschau liefert ein PDF');
   await page.waitForFunction(() => document.querySelector('iframe').src.startsWith('blob:'));
   ok(true, 'Vorschau-Fenster zeigt das PDF');
+  // Haken ändern, während die Vorschau offen ist: sie lädt sich von selbst neu.
+  const [auto] = await Promise.all([page.waitForResponse((r) => r.url().includes('/api/reports/customer')), page.uncheck('label:has-text("Notiz") input')]);
+  ok(JSON.parse(auto.request().postData()).options.note === false || JSON.stringify(JSON.parse(auto.request().postData()).options).includes('false'), 'Vorschau aktualisiert sich beim Haken');
+  await page.click('button:has-text("Vorschau schließen")');
+  await page.waitForFunction(() => !document.querySelector('iframe').offsetParent);
+  ok(true, 'Vorschau lässt sich schließen');
+  await page.check('label:has-text("Notiz") input');
+  await page.waitForTimeout(600);
+  ok((await page.locator('iframe').isHidden()), 'geschlossene Vorschau lädt nicht von selbst neu');
 
   // Woche und Monat
   await page.selectOption('#rb-typ', 'week'); await page.fill('#rb-tag', '2026-05-27');
