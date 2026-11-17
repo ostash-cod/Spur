@@ -1442,6 +1442,208 @@ async function tagesansicht(main, userId, dateStr) {
   );
 }
 
+// --- Wochenansicht pro Mitarbeiter (Vorbild Clockodo) ---------------------------------
+const WEEK_PX_PER_MIN = 0.9;
+const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+function mondayOf(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+function isoWeek(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  return Math.ceil(((t - Date.UTC(t.getUTCFullYear(), 0, 1)) / 86400000 + 1) / 7);
+}
+const fmtEuro = (v) => v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+const fmtH = (ms) => { const m = Math.round(ms / 60000); return `${Math.floor(m / 60)}:${pad2(m % 60)} h`; };
+
+// Ein Block zählt als Arbeit beim Kunden (für den Betrag), wenn er auf einer echten Baustelle liegt und nicht Pause/Privat ist.
+const billableBlock = (b) => b.type === 'site' && b.site && !b.site.system && b.site.kind !== 'haendler' && b.seg.kind === 'work' && !(b.seg.activity && (b.seg.billing ?? 'free') !== 'bill');
+
+async function woche(main, userArg, dateStr) {
+  const users = (await api('/users')).filter((u) => u.active);
+  if (!users.length) throw new Error('Noch keine Mitarbeiter.');
+  const userId = Number(userArg) || (users.find((u) => u.role !== 'admin') ?? users[0]).id;
+  const user = users.find((u) => u.id === userId) ?? users[0];
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(dateStr ?? '') ? new Date(...dateStr.split('-').map((n, i) => (i === 1 ? Number(n) - 1 : Number(n)))) : new Date();
+  const mon = mondayOf(base);
+  const dates = [...Array(7)].map((_, i) => new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i));
+  const from = dates[0].getTime();
+  const to = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 7).getTime();
+  const [days, sites, customers, notes, photos, sheets] = await Promise.all([
+    api(`/days?user_id=${user.id}&from=${from}&to=${to}`),
+    api('/sites?all=1'),
+    api('/customers').catch(() => []),
+    api(`/notes?from=${toDateStr(dates[0])}&to=${toDateStr(dates[6])}&user_id=${user.id}`).catch(() => []),
+    api(`/photos?from=${from}&to=${to}&user_id=${user.id}`).catch(() => []),
+    api(`/sheets?from=${toDateStr(dates[0])}&to=${toDateStr(dates[6])}&user_id=${user.id}`).catch(() => []),
+  ]);
+  const siteById = new Map(sites.map((x) => [x.id, x]));
+  const rateOf = (site) => customers.find((c) => c.id === site?.customer_id)?.hourly_rate ?? null;
+  const go = (d, uid = user.id) => (location.hash = `#/woche/${uid}/${toDateStr(d)}`);
+
+  // Blöcke pro Tag
+  const perDay = dates.map((d) => {
+    const key = toDateStr(d);
+    const list = days.filter((x) => toDateStr(new Date(x.started_at)) === key);
+    const blocks = list.flatMap((x) => buildBlocks(x, siteById).map((b) => ({ ...b, day: x })));
+    const work = list.reduce((a, x) => a + ((x.ended_at ?? Date.now()) - x.started_at), 0)
+      - blocks.filter((b) => b.type === 'site' && (b.seg.kind === 'break' || b.seg.kind === 'private')).reduce((a, b) => a + (b.end - b.start), 0)
+      - blocks.filter((b) => b.isPrivate).reduce((a, b) => a + (b.end - b.start), 0);
+    const money = blocks.filter(billableBlock).reduce((a, b) => a + ((b.end - b.start) / 3600000) * (rateOf(b.site) ?? 0), 0);
+    const submitted = sheets.some((sh) => sh.date === key);
+    return { d, key, list, blocks, work: Math.max(0, work), money, submitted,
+      start: list.length ? Math.min(...list.map((x) => x.started_at)) : null,
+      end: list.length ? Math.max(...list.map((x) => x.ended_at ?? Date.now())) : null };
+  });
+
+  // Sichtbarer Zeitbereich: mindestens 7 bis 17 Uhr, sonst so weit wie gearbeitet wurde.
+  const hourOf = (ms) => { const x = new Date(ms); return x.getHours() + x.getMinutes() / 60; };
+  let h0 = 7, h1 = 17;
+  for (const pd of perDay) for (const b of pd.blocks) { h0 = Math.min(h0, Math.floor(hourOf(b.start))); h1 = Math.max(h1, Math.ceil(hourOf(b.end))); }
+  const colH = (h1 - h0) * 60 * WEEK_PX_PER_MIN;
+  const yOf = (ms, d) => ((ms - new Date(d.getFullYear(), d.getMonth(), d.getDate(), h0).getTime()) / 60000) * WEEK_PX_PER_MIN;
+
+  const noteFor = (key, siteId) => notes.find((n) => n.date === key && (n.site_id ?? null) === (siteId ?? null) && n.kind !== 'material');
+  // Jedes Foto gehört zu genau einem Block: zu dem, in dessen Zeit es aufgenommen wurde,
+  // sonst zum ersten Block seiner Baustelle an diesem Tag.
+  const photoHome = new Map();
+  for (const p of photos) {
+    const pd = perDay.find((x) => x.key === toDateStr(new Date(p.taken_at)));
+    if (!pd) continue;
+    const real = pd.blocks.filter((b) => b.type === 'site' && b.site && !b.site.system);
+    const home = real.find((b) => p.taken_at >= b.start && p.taken_at <= b.end && (!p.site_id || p.site_id === b.site.id))
+      ?? real.find((b) => p.site_id && b.site.id === p.site_id)
+      ?? real.find((b) => p.taken_at >= b.start && p.taken_at <= b.end);
+    if (home) photoHome.set(p.id, home);
+  }
+  const photosFor = (b) => photos.filter((p) => photoHome.get(p.id) === b);
+
+  const blockEl = (b, pd, shownNotes) => {
+    const top = Math.max(0, Math.round(yOf(b.start, pd.d)));
+    const height = Math.max(18, Math.round(((b.end - b.start) / 60000) * WEEK_PX_PER_MIN) - 2);
+    const dur = fmtH(b.end - b.start);
+    let bg, fg = '#1B1C1E', title, sub = '';
+    if (b.type === 'travel') {
+      title = b.isPrivate ? 'Privatfahrt' : b.label;
+      sub = b.stripeNote ?? '';
+      bg = b.isPrivate ? '#B8BCC2' : b.stripeTarget ? `repeating-linear-gradient(135deg,#F5C400 0 10px,${b.stripeTarget.color} 10px 20px)` : '#F5C400';
+    } else if (b.seg.kind === 'break') { title = 'Pause'; bg = '#D5D8DC'; }
+    else if (b.seg.kind === 'private' || b.isPrivate) { title = 'Privat'; bg = '#B8BCC2'; }
+    else {
+      const color = b.site?.color ?? '#B8BCC2';
+      bg = color; fg = isLight(color) ? '#1B1C1E' : '#FFFFFF';
+      title = b.site?.name ?? 'Ohne Baustelle';
+      sub = b.site?.kind === 'haendler' ? 'Händler' : b.site?.customer_name ?? '';
+      if (b.seg.activity) sub = `${ACTIVITY_NAME[b.seg.activity]}${sub ? ' · ' + sub : ''}`;
+    }
+    // Notiz nur auf dem ersten Block dieser Baustelle am Tag
+    let note = null;
+    if (b.type === 'site' && b.site && !b.site.system && !shownNotes.has(b.site.id)) {
+      note = noteFor(pd.key, b.site.id) ?? null;
+      if (note) shownNotes.add(b.site.id);
+    }
+    const nPhotos = b.type === 'site' && b.site && !b.site.system ? photosFor(b).length : 0;
+    const el = h('div', { class: 'wblock', tabindex: 0, role: 'button', style: `top:${top}px;height:${height}px;background:${bg};color:${fg}` },
+      h('strong', {}, title),
+      sub ? h('div', { class: 'wsub' }, sub) : null,
+      note ? h('div', { class: 'wnote' }, note.text) : null,
+      h('div', { class: 'wfoot' }, h('span', {}, nPhotos ? `📷 ${nPhotos}` : ''), h('span', {}, dur)),
+    );
+    el.onclick = () => blockDialog(b, pd, note, nPhotos);
+    el.onkeydown = (e) => { if (e.key === 'Enter') blockDialog(b, pd, note, nPhotos); };
+    return el;
+  };
+
+  function blockDialog(b, pd, note, nPhotos) {
+    const rate = billableBlock(b) ? rateOf(b.site) : null;
+    const hours = (b.end - b.start) / 3600000;
+    const name = b.type === 'travel' ? (b.isPrivate ? 'Privatfahrt' : b.label) : b.seg.kind === 'break' ? 'Pause' : b.seg.kind === 'private' ? 'Privat' : b.site?.name ?? 'Ohne Baustelle';
+    const text = h('textarea', { rows: 6, maxlength: 1000, style: 'width:100%;max-width:none;font:inherit;line-height:1.4;padding:8px;box-sizing:border-box' }, note?.text ?? '');
+    const err = h('p', { class: 'error' });
+    const pics = h('div', { class: 'row', style: 'gap:8px;margin-top:8px' });
+    const d = openDialog(
+      h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin:0' }, h('h2', { style: 'margin:0' }, name), h('button', { class: 'small', 'aria-label': 'Schließen', onclick: () => d.close() }, '✕')),
+      b.site?.customer_name ? h('p', { class: 'hint', style: 'margin:2px 0 0' }, b.site.customer_name) : null,
+      h('p', { style: 'margin:12px 0 4px' }, `${fmtTime(b.start)} – ${fmtTime(b.end)} Uhr · ${fmtH(b.end - b.start)}`),
+      rate != null ? h('p', { style: 'margin:0' }, `${fmtEuro(hours * rate)} · ${showNum(rate)} €/h`) : billableBlock(b) ? h('p', { class: 'hint', style: 'margin:0' }, 'Kein Stundensatz beim Kunden eingetragen.') : null,
+      b.type === 'site' && b.site && !b.site.system ? h('div', {},
+        h('label', {}, 'Notiz / Leistungsbeschreibung'),
+        note ? text : h('p', { class: 'hint' }, 'Zu dieser Baustelle gibt es an diesem Tag keine Notiz vom Mitarbeiter.'),
+        nPhotos ? pics : null,
+      ) : null,
+      err,
+      h('div', { class: 'actions', style: 'margin-top:12px' },
+        note ? h('button', { class: 'primary', onclick: async () => {
+          if (!text.value.trim()) return (err.textContent = 'Die Notiz darf nicht leer sein.');
+          try { await api(`/notes/${note.id}`, { method: 'PATCH', body: { text: text.value } }); d.close(); route(); } catch (ex) { err.textContent = ex.message; }
+        } }, 'Notiz speichern') : null,
+        h('a', { href: `#/mitarbeiter/${user.id}/${pd.key}`, onclick: () => d.close() }, 'Tagesansicht öffnen'),
+      ),
+      h('p', { class: 'hint', style: 'margin-top:10px' }, 'Zeiten ändern, teilen und löschen kommt im nächsten Schritt.'),
+    );
+    if (nPhotos) {
+      for (const p of photosFor(b)) {
+        const img = h('img', { alt: 'Foto', style: 'width:110px;height:82px;object-fit:cover;border-radius:6px;cursor:pointer;background:#eee' });
+        fetch(`/api/photos/${p.id}/file`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.blob()).then((bl) => {
+          const url = URL.createObjectURL(bl); img.src = url; img.onclick = () => window.open(url, '_blank');
+        }).catch(() => {});
+        pics.append(img);
+      }
+    }
+  }
+
+  // Kopf: Mitarbeiter wechseln, Heute, Datum, Pfeile, Monat und KW
+  const userSel = h('select', { class: 'wuser', 'aria-label': 'Mitarbeiter wechseln', onchange: (e) => go(mon, Number(e.target.value)) },
+    ...users.map((u) => h('option', { value: u.id, selected: u.id === user.id }, u.name)));
+  const dateIn = h('input', { type: 'date', value: toDateStr(base), 'aria-label': 'Tag wählen', style: 'width:auto', onchange: (e) => e.target.value && go(new Date(e.target.value + 'T12:00')) });
+  const monthName = dates[3].toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+  const totalWork = perDay.reduce((a, p) => a + p.work, 0);
+  const totalMoney = perDay.reduce((a, p) => a + p.money, 0);
+  const today = toDateStr(new Date());
+
+  const hoursCol = h('div', { class: 'whours', style: `height:${colH}px` }, ...[...Array(h1 - h0 + 1)].map((_, i) => h('span', { style: `top:${i * 60 * WEEK_PX_PER_MIN}px` }, `${pad2(h0 + i)}:00`)));
+  const cols = perDay.map((pd, i) => {
+    const shown = new Set();
+    const col = h('div', { class: 'wcol', style: `height:${colH}px` }, ...[...Array(h1 - h0)].map((_, k) => h('div', { class: 'wline', style: `top:${(k + 1) * 60 * WEEK_PX_PER_MIN}px` })));
+    for (const b of pd.blocks) col.append(blockEl(b, pd, shown));
+    const loose = notes.filter((n) => n.date === pd.key && n.site_id == null && n.kind !== 'material');
+    return { pd, i, col, loose };
+  });
+
+  main.replaceChildren(
+    h('div', { class: 'whead' },
+      userSel,
+      h('div', { class: 'actions', style: 'margin:0' },
+        h('button', { onclick: () => go(new Date()) }, 'Heute'), dateIn,
+        h('button', { 'aria-label': 'Woche zurück', onclick: () => go(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() - 7)) }, '‹'),
+        h('button', { 'aria-label': 'Woche vor', onclick: () => go(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 7)) }, '›')),
+      h('h1', { style: 'margin:0' }, monthName, h('span', { class: 'wkw' }, ` / KW ${isoWeek(dates[3])}`)),
+    ),
+    h('div', { class: 'card wcard' },
+      h('div', { class: 'wgrid', style: `grid-template-columns:58px ${perDay.map((pd, i) => (i >= 5 && !pd.list.length ? 'minmax(70px,0.5fr)' : 'minmax(120px,1fr)')).join(' ')}` },
+        h('div', { class: 'wsum' }, h('div', { class: 'hint' }, 'Woche'), h('strong', {}, fmtH(totalWork)), totalMoney ? h('div', {}, fmtEuro(totalMoney)) : null),
+        ...cols.map(({ pd, i }) => h('div', { class: `wday${pd.key === today ? ' today' : ''}`, onclick: () => (location.hash = `#/mitarbeiter/${user.id}/${pd.key}`), title: 'Tagesansicht öffnen' },
+          h('strong', {}, `${pad2(pd.d.getDate())} ${WEEKDAYS[i]}`))),
+        hoursCol,
+        ...cols.map(({ col }) => col),
+        h('div', {}),
+        ...cols.map(({ pd, loose }) => h('div', { class: 'wfootday' },
+          pd.list.length ? [
+            h('strong', {}, fmtH(pd.work)),
+            h('div', {}, `${fmtTime(pd.start)} – ${fmtTime(pd.end)}`),
+            pd.money ? h('div', {}, fmtEuro(pd.money)) : null,
+            h('div', { class: pd.submitted ? 'hint ok' : 'hint warn' }, pd.submitted ? 'abgegeben ✓' : 'noch nicht abgegeben'),
+          ] : h('span', { class: 'hint' }, '–'),
+          ...loose.map((n) => h('div', { class: 'wnote loose' }, n.text)),
+        )),
+      ),
+    ),
+    h('p', { class: 'hint' }, 'Klick auf einen Block: Zeit, Betrag, Notiz und Fotos. Klick auf den Tag oben: Tagesansicht.'),
+  );
+}
+
 // --- Einstellungen ---------------------------------------------------------
 async function einstellungen(main) {
   const s = await api('/settings');
@@ -1770,7 +1972,7 @@ async function lohn(main) {
   if (users.length) show();
 }
 
-Object.assign(pages, { mitarbeiter, kunden, berichte, statistik, einstellungen, belege, lohn });
+Object.assign(pages, { mitarbeiter, woche, kunden, berichte, statistik, einstellungen, belege, lohn });
 
 (async function init() {
   token = storage('get', 'spur-token');

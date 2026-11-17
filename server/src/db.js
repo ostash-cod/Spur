@@ -153,6 +153,18 @@ CREATE TABLE IF NOT EXISTS trip_marks (
   site_id INTEGER REFERENCES sites(id),
   UNIQUE (day_id, started_at)
 );
+-- Stille Originale: Jede Änderung durch den Chef speichert den alten Wert. Nichts wird überschrieben oder gelöscht.
+CREATE TABLE IF NOT EXISTS change_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item TEXT NOT NULL,
+  item_id INTEGER NOT NULL,
+  field TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  changed_at INTEGER NOT NULL,
+  changed_by INTEGER REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS change_log_item ON change_log (item, item_id);
 CREATE TABLE IF NOT EXISTS points (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day_id INTEGER NOT NULL REFERENCES days(id),
@@ -292,4 +304,12 @@ export function setSetting(db, key, value) {
   db.prepare(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   ).run(key, JSON.stringify(value));
+}
+
+/** Merkt still eine Änderung (alter und neuer Wert). Nur für den Hintergrund, nicht für PDF oder Alltagsansicht. */
+export function logChange(db, { item, itemId, field, oldValue, newValue, by }) {
+  if (String(oldValue ?? '') === String(newValue ?? '')) return;
+  db.prepare('INSERT INTO change_log (item, item_id, field, old_value, new_value, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    item, itemId, field, oldValue == null ? null : String(oldValue), newValue == null ? null : String(newValue), Date.now(), by ?? null,
+  );
 }

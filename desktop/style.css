@@ -113,3 +113,27 @@ details summary { cursor: pointer; color: var(--text-leise); padding: 4px 0; }
 .timeline .block.clickable:hover { outline: 2px solid #1B1C1E; }
 .timeline .block.striped strong, .timeline .block.striped .small { background: rgba(245, 196, 0, 0.92); color: #1B1C1E; padding: 0 5px; border-radius: 4px; width: fit-content; }
 button[aria-pressed='true'] { background: var(--text); color: #fff; border-color: var(--text); }
+
+/* Wochenansicht */
+.whead { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; margin-bottom: 14px; }
+.whead .wuser { font-size: 1.35rem; font-weight: 700; border: 1px solid transparent; background: transparent; padding: 4px 6px; border-radius: 8px; max-width: none; width: auto; }
+.whead .wuser:hover { border-color: var(--linie); background: #fff; }
+.whead .wkw { color: var(--text-leise); font-weight: 400; }
+.wcard { padding: 12px; overflow-x: auto; }
+.wgrid { display: grid; grid-template-columns: 58px repeat(7, minmax(120px, 1fr)); min-width: 920px; }
+.wday { padding: 6px 8px 8px; border-bottom: 1px solid var(--linie); cursor: pointer; font-size: 1.05rem; }
+.wday.today strong { background: var(--gelb); padding: 1px 6px; border-radius: 6px; }
+.wsum { padding: 4px 4px 8px; border-bottom: 1px solid var(--linie); font-size: 0.8rem; line-height: 1.25; }
+.whours { position: relative; }
+.whours span { position: absolute; right: 8px; transform: translateY(-50%); font-size: 0.75rem; color: var(--text-leise); }
+.wcol { position: relative; border-left: 1px solid var(--linie); }
+.wline { position: absolute; left: 0; right: 0; border-top: 1px dashed #eceef0; }
+.wblock { position: absolute; left: 4px; right: 4px; border-radius: 6px; padding: 4px 6px 16px; box-sizing: border-box; overflow: hidden; cursor: pointer; font-size: 0.8rem; line-height: 1.25; box-shadow: inset 3px 0 0 rgba(0, 0, 0, 0.25); }
+.wblock:hover, .wblock:focus { outline: 2px solid #1b1c1e; z-index: 2; }
+.wblock strong { display: block; font-size: 0.82rem; }
+.wblock .wsub { opacity: 0.85; }
+.wblock .wnote { margin-top: 3px; white-space: pre-line; opacity: 0.95; }
+.wblock .wfoot { position: absolute; left: 6px; right: 6px; bottom: 2px; display: flex; justify-content: space-between; font-weight: 700; font-size: 0.75rem; }
+.wfootday { border-left: 1px solid var(--linie); border-top: 1px solid var(--linie); padding: 6px 8px; font-size: 0.82rem; line-height: 1.35; }
+.wfootday .warn { color: #8a6d00; }
+.wnote.loose { margin-top: 6px; padding: 4px 6px; background: var(--grau); border-radius: 6px; white-space: pre-line; }

@@ -81,3 +81,24 @@ test('Material-Notiz: eigene Art, zählt nicht als Arbeitsnotiz, filterbar', asy
   assert.equal(mat[0].kind, 'material');
   assert.equal((await call('POST', '/api/notes', wt, { client_id: 'mat-0002-cccc', date: '2026-11-06', kind: 'quatsch', text: 'x' })).statusCode, 400);
 });
+
+test('Stille Originale: Änderungen an Notizen werden mit altem Wert gemerkt', async () => {
+  const { openDb } = await import('../src/db.js');
+  const { createUser } = await import('../src/auth.js');
+  const { buildApp } = await import('../src/app.js');
+  const db = openDb(':memory:');
+  const a = createUser(db, { name: 'Chef', role: 'admin' });
+  const w = createUser(db, { name: 'Serhii' });
+  const app = await buildApp({ db });
+  const tok = async (c) => (await app.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+  const h = (t) => ({ authorization: `Bearer ${t}` });
+  const n = (await app.inject({ method: 'POST', url: '/api/notes', headers: h(wt), payload: { client_id: 'note-12345678', date: '2026-11-10', text: 'Wand gespachtelt', updated_at: 1000 } })).json();
+  await app.inject({ method: 'PATCH', url: `/api/notes/${n.id}`, headers: h(at), payload: { text: 'Wand gespachtelt und geschliffen' } });
+  await app.inject({ method: 'POST', url: '/api/notes', headers: h(wt), payload: { client_id: 'note-12345678', date: '2026-11-10', text: 'Wand fertig', updated_at: Date.now() + 1000 } });
+  const log = db.prepare('SELECT old_value, new_value, changed_by FROM change_log WHERE item = ? AND item_id = ? ORDER BY id').all('note', n.id).map((r) => ({ ...r }));
+  assert.deepEqual(log, [
+    { old_value: 'Wand gespachtelt', new_value: 'Wand gespachtelt und geschliffen', changed_by: a.id },
+    { old_value: 'Wand gespachtelt und geschliffen', new_value: 'Wand fertig', changed_by: w.id },
+  ]);
+});

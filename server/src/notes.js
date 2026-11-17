@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { logChange } from './db.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_NOTE = 5000;
@@ -25,11 +26,14 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
     if (kind !== 'arbeit' && kind !== 'material') return reply.code(400).send({ error: 'Art der Notiz ungültig' });
     const text = typeof b.text === 'string' ? b.text.trim() : '';
     if (text.length > MAX_NOTE) return reply.code(400).send({ error: 'Die Notiz ist zu lang' });
+    const before = db.prepare('SELECT id, text, updated_at FROM notes WHERE user_id = ? AND client_id = ?').get(req.user.id, b.client_id);
     if (!text) {
+      if (before) logChange(db, { item: 'note', itemId: before.id, field: 'text', oldValue: before.text, newValue: null, by: req.user.id });
       db.prepare('DELETE FROM notes WHERE user_id = ? AND client_id = ?').run(req.user.id, b.client_id);
       return { deleted: true };
     }
     const at = Number.isInteger(b.updated_at) ? b.updated_at : Date.now();
+    if (before && at >= before.updated_at) logChange(db, { item: 'note', itemId: before.id, field: 'text', oldValue: before.text, newValue: text, by: req.user.id });
     db.prepare(
       `INSERT INTO notes (user_id, client_id, date, site_id, text, updated_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id, client_id) DO UPDATE SET date = excluded.date, site_id = excluded.site_id, text = excluded.text, updated_at = excluded.updated_at, kind = excluded.kind
@@ -57,9 +61,11 @@ export function registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDi
 
   app.patch('/api/notes/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id);
-    if (!db.prepare('SELECT 1 FROM notes WHERE id = ?').get(id)) return reply.code(404).send({ error: 'Notiz nicht gefunden' });
+    const old = db.prepare('SELECT text FROM notes WHERE id = ?').get(id);
+    if (!old) return reply.code(404).send({ error: 'Notiz nicht gefunden' });
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
     if (!text || text.length > MAX_NOTE) return reply.code(400).send({ error: 'Text fehlt oder ist zu lang' });
+    logChange(db, { item: 'note', itemId: id, field: 'text', oldValue: old.text, newValue: text, by: req.user.id });
     db.prepare('UPDATE notes SET text = ?, updated_at = ? WHERE id = ?').run(text, Date.now(), id);
     return noteRow(db.prepare(`${NOTE_SELECT} WHERE n.id = ?`).get(id));
   });
