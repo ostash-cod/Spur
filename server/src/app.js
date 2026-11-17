@@ -49,6 +49,10 @@ const VALIDATORS = {
     if (!Number.isInteger(v) || v < 24 || v > 168) throw new Error('Löschfrist auf dem Handy: 24 bis 168 Stunden');
     return v;
   },
+  change_log_enabled(v) {
+    if (typeof v !== 'boolean') throw new Error('Protokoll: ja oder nein');
+    return v;
+  },
   server_route_days(v) {
     if (!Number.isInteger(v) || (v !== 0 && (v < 7 || v > 14))) throw new Error('Weg auf dem Server: 0 (aus) oder 7 bis 14 Tage');
     return v;
@@ -441,7 +445,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     }
   });
 
-  // Chef löscht einen Abschnitt: Er wird nur ausgeblendet, das Original bleibt in der Datenbank.
+  // Chef löscht einen Abschnitt.
   app.delete('/api/segments/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const seg = segById(Number(req.params.id));
     if (!seg) return reply.code(404).send({ error: 'Abschnitt nicht gefunden' });
@@ -449,7 +453,9 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     db.exec('BEGIN');
     try {
       logChange(db, { item: 'segment', itemId: seg.id, field: 'deleted', oldValue: null, newValue: now, by: req.user.id });
-      db.prepare('UPDATE segments SET deleted_at = ?, chef_edited = 1, updated_at = ? WHERE id = ?').run(now, now, seg.id);
+      // Zettel-Modell: wirklich löschen (kein stilles Original). Nur mit eingeschaltetem Protokoll bleibt er ausgeblendet erhalten.
+      if (getSettings(db).change_log_enabled === true) db.prepare('UPDATE segments SET deleted_at = ?, chef_edited = 1, updated_at = ? WHERE id = ?').run(now, now, seg.id);
+      else db.prepare('DELETE FROM segments WHERE id = ?').run(seg.id);
       // Am Rand des Tages wird der Tag kürzer, damit die gelöschte Zeit nicht als Fahrt zählt.
       // In der Mitte bleibt die Lücke (sie zählt dann als Fahrt zwischen zwei Orten).
       const d = db.prepare('SELECT * FROM days WHERE id = ?').get(seg.day_id);

@@ -373,7 +373,7 @@ test('Besichtigung: Art wird gespeichert, nur der Chef setzt die Abrechnung', as
   assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${id}`, headers: auth(at), payload: { billing: 'x' } })).statusCode, 400);
 });
 
-test('Schritt 3: Chef ändert, teilt und löscht Abschnitte; Originale bleiben, Handy überschreibt nicht', async () => {
+test('Schritt 3: Chef ändert, teilt und löscht Abschnitte; kein Änderungsverlauf, Handy überschreibt nicht', async () => {
   const db2 = openDb(':memory:');
   const a = createUser(db2, { name: 'Chef', role: 'admin' });
   const w = createUser(db2, { name: 'Serhii' });
@@ -422,11 +422,11 @@ test('Schritt 3: Chef ändert, teilt und löscht Abschnitte; Originale bleiben, 
   assert.equal(d.segments.length, 3);
   assert.deepEqual(d.segments.slice(1).map((x) => [x.started_at - t0, x.ended_at - t0]), [[6 * H, 7 * H], [7 * H, 8 * H]]);
 
-  // Löschen: ausgeblendet, aber noch in der Datenbank
+  // Löschen: wirklich weg (kein stilles Original)
   assert.equal((await app2.inject({ method: 'DELETE', url: `/api/segments/${sp.id}`, headers: auth(at) })).statusCode, 200);
   d = await list();
   assert.equal(d.segments.length, 2);
-  assert.ok(db2.prepare('SELECT deleted_at FROM segments WHERE id = ?').get(sp.id).deleted_at > 0);
+  assert.equal(db2.prepare('SELECT 1 FROM segments WHERE id = ?').get(sp.id), undefined, 'wirklich gelöscht');
   assert.equal((await app2.inject({ method: 'DELETE', url: `/api/segments/${sp.id}`, headers: auth(at) })).statusCode, 404);
   // Der gelöschte letzte Abschnitt endete nicht am Tagesende (8 h, Tag bis 9 h): Tag bleibt.
   assert.equal(d.ended_at, t0 + 9 * H);
@@ -437,12 +437,10 @@ test('Schritt 3: Chef ändert, teilt und löscht Abschnitte; Originale bleiben, 
   d = await list();
   assert.equal(d.ended_at, t0 + 6.5 * H, 'Tag endet mit dem gelöschten letzten Abschnitt früher');
 
-  // Stille Originale
-  const fields = db2.prepare("SELECT field, old_value FROM change_log WHERE item = 'segment' AND item_id = ? ORDER BY id").all(s1.id).map((r) => r.field);
-  assert.deepEqual(fields, ['started_at', 'site_id']);
-  assert.ok(db2.prepare("SELECT COUNT(*) AS n FROM change_log WHERE item = 'day' AND field = 'ended_at'").get().n >= 1);
+  // Zettel-Modell (17.11.): keine stillen Originale, kein Änderungsverlauf (Schalter aus)
+  assert.equal(db2.prepare('SELECT COUNT(*) AS n FROM change_log').get().n, 0);
   const hist = (await app2.inject({ url: `/api/segments/${s1.id}/history`, headers: auth(at) })).json();
-  assert.ok(hist.updated_at > 0 && hist.changes === 2);
+  assert.ok(hist.updated_at > 0 && hist.changes === 0);
 
   // Chef legt eine Notiz für den Mitarbeiter an, Mitarbeiter darf das nicht für andere
   const n = await app2.inject({ method: 'POST', url: '/api/notes', headers: auth(at), payload: { user_id: w.id, client_id: 'chef-note-1234', date: '2026-11-10', site_id: Number(site2), text: 'Von Chef' } });

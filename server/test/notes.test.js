@@ -93,6 +93,7 @@ test('Stille Originale: Änderungen an Notizen werden mit altem Wert gemerkt', a
   const tok = async (c) => (await app.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
   const at = await tok(a.code), wt = await tok(w.code);
   const h = (t) => ({ authorization: `Bearer ${t}` });
+  db.prepare("UPDATE settings SET value = 'true' WHERE key = 'change_log_enabled'").run(); // Schalter an
   const n = (await app.inject({ method: 'POST', url: '/api/notes', headers: h(wt), payload: { client_id: 'note-12345678', date: '2026-11-10', text: 'Wand gespachtelt', updated_at: 1000 } })).json();
   await app.inject({ method: 'PATCH', url: `/api/notes/${n.id}`, headers: h(at), payload: { text: 'Wand gespachtelt und geschliffen' } });
   await app.inject({ method: 'POST', url: '/api/notes', headers: h(wt), payload: { client_id: 'note-12345678', date: '2026-11-10', text: 'Wand fertig', updated_at: Date.now() + 1000 } });

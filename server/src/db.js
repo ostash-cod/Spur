@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS = {
   phone_points_hours: 48,
   // Variante B (Betriebsschalter): 0 = aus. 7 bis 14 = Handys schicken den Weg, der Server löscht ihn nach so vielen Tagen.
   server_route_days: 0,
+  // Betriebsschalter „Änderungen protokollieren“: Standard aus (keine stillen Originale).
+  change_log_enabled: false,
 };
 
 const SCHEMA = `
@@ -324,8 +326,13 @@ export function setSetting(db, key, value) {
   ).run(key, JSON.stringify(value));
 }
 
-/** Merkt still eine Änderung (alter und neuer Wert). Nur für den Hintergrund, nicht für PDF oder Alltagsansicht. */
+/**
+ * Änderungsprotokoll. Laut Auftrag Zettel-Modell (17.11.) gibt es KEINE stillen Originale:
+ * Es wird nur geschrieben, wenn der Betriebsschalter change_log_enabled eingeschaltet ist (Standard aus).
+ * Der Schalter ist für andere Firmen oder falls Anwalt/BayLDA ein Protokoll verlangen.
+ */
 export function logChange(db, { item, itemId, field, oldValue, newValue, by }) {
+  if (getSettings(db).change_log_enabled !== true) return;
   if (String(oldValue ?? '') === String(newValue ?? '')) return;
   db.prepare('INSERT INTO change_log (item, item_id, field, old_value, new_value, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
     item, itemId, field, oldValue == null ? null : String(oldValue), newValue == null ? null : String(newValue), Date.now(), by ?? null,

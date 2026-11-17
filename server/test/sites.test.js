@@ -473,5 +473,5 @@ test('Kunden: Adresszusatz, privat/geschäftlich, Stundensätze ab Datum und pro
   assert.equal(rateAt(db, c.id, Number(w), '2026-11-10'), 55, 'vor seinem Datum der Grundsatz');
   const del = (await call('DELETE', `/api/customer-rates/${r.rates[1].id}`, at)).json();
   assert.equal(del.rates.length, 1);
-  assert.ok(db.prepare("SELECT COUNT(*) AS n FROM change_log WHERE item = 'customer_rate'").get().n === 3);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM change_log').get().n, 0, 'kein Änderungsverlauf');
 });
