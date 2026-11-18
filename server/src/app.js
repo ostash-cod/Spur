@@ -10,7 +10,7 @@ import { registerSheetRoutes } from './sheets.js';
 import { registerWeekSheetRoutes } from './weeksheets.js';
 import { registerReceiptRoutes } from './receipts.js';
 import { registerPayrollRoutes } from './payroll.js';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites, mayUploadPoints, logChange } from './db.js';
 import {
@@ -551,6 +551,22 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   registerWeekSheetRoutes(app, { db, requireUser, requireAdmin });
   registerPayrollRoutes(app, { db, requireAdmin });
   registerReceiptRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
+
+  // Sicherung: eine saubere Kopie der Datenbank zum Herunterladen (nur Chef). Fotos liegen separat und sind nicht dabei.
+  app.get('/api/backup', { preHandler: requireAdmin }, async (req, reply) => {
+    const dir = mkdtempSync(join(tmpdir(), 'spur-backup-'));
+    const file = join(dir, 'spur.sqlite');
+    try {
+      db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+      const data = readFileSync(file);
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, (c) => (c === 'T' ? '_' : ''));
+      reply.header('Content-Type', 'application/octet-stream');
+      reply.header('Content-Disposition', `attachment; filename="spur-sicherung-${stamp}.sqlite"`);
+      return reply.send(data);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   app.get('/api/health', async () => ({ ok: true }));
 

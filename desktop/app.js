@@ -1984,7 +1984,24 @@ async function einstellungen(main) {
     status,
   );
 
-  main.replaceChildren(h('h1', {}, 'Einstellungen'), h('p', { class: 'sub' }, 'Firma, Standorte, Pausenregel und Sätze.'), form);
+  const backupMsg = h('span', { class: 'hint' });
+  const backupCard = h('div', { class: 'card' },
+    h('h2', {}, 'Sicherung'),
+    h('p', { class: 'hint' }, 'Lädt eine Kopie der ganzen Datenbank auf diesen PC (Zeiten, Zettel, Baustellen, alte GPS-Punkte). Fotos sind nicht dabei. Bewahre die Datei sicher auf, sie enthält Daten der Mitarbeiter.'),
+    h('div', { class: 'actions' }, h('button', { onclick: async () => {
+      backupMsg.textContent = 'Wird erstellt …';
+      try {
+        const res = await fetch('/api/backup', { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error('Sicherung fehlgeschlagen');
+        const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? 'spur-sicherung.sqlite';
+        const a = h('a', { href: URL.createObjectURL(await res.blob()), download: name });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        backupMsg.textContent = `Gespeichert: ${name}`;
+      } catch (ex) { backupMsg.textContent = ex.message; }
+    } }, 'Datenbank sichern'), backupMsg));
+  main.replaceChildren(h('h1', {}, 'Einstellungen'), h('p', { class: 'sub' }, 'Firma, Standorte, Pausenregel und Sätze.'), form, backupCard);
   watchPair($('firma-lat'), $('firma-lng'), sayStatus);
   watchPair($('lager-lat'), $('lager-lng'), sayStatus);
 }

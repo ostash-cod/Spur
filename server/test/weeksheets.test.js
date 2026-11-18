@@ -86,4 +86,10 @@ test('Wochenzettel: schicken, bestätigen, sperren, PDF, Rechte', async () => {
   assert.equal(pdf.headers['content-type'], 'application/pdf');
   assert.equal(pdf.rawPayload.subarray(0, 4).toString(), '%PDF');
   assert.equal((await call('GET', `/api/week-sheets/${re.id}/pdf`, w2t)).statusCode, 404);
+
+  // Sicherung: nur Chef, echte SQLite-Datei
+  assert.equal((await call('GET', '/api/backup', wt)).statusCode, 403);
+  const bk = await call('GET', '/api/backup', at);
+  assert.equal(bk.statusCode, 200);
+  assert.equal(bk.rawPayload.subarray(0, 15).toString(), 'SQLite format 3');
 });
