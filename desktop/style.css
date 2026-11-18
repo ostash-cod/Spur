@@ -175,3 +175,15 @@ main.wide .wfootday { font-size: 0.92rem; }
 .wblock.wshort .wsub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .wblock.wshort .wnote { display: none; }
 .wblock.wshort .wfoot { position: static; margin-left: auto; display: block; left: auto; right: auto; }
+
+/* Kunden und Projekte: feste Sprungleiste */
+.jumpbar { position: sticky; top: 0; z-index: 6; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 0; margin: 0 0 12px; background: var(--grau); border-bottom: 1px solid var(--linie); }
+.jumpbar button { background: #fff; font-weight: 600; }
+.jumpbar button:hover { background: var(--gelb); }
+#sec-kunden, #sec-baustellen, #sec-haendler { scroll-margin-top: 64px; }
+/* Berichte: Formular links, Vorschau rechts über die volle Breite */
+.rgrid { display: grid; grid-template-columns: minmax(340px, 480px) 1fr; gap: 16px; align-items: start; }
+.rgrid .card { margin-bottom: 0; }
+.rgrid .rform { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+.rgrid iframe { width: 100%; height: calc(100vh - 110px) !important; min-height: 500px; }
+@media (max-width: 1000px) { .rgrid { grid-template-columns: 1fr; } .rgrid .rform { position: static; max-height: none; } }

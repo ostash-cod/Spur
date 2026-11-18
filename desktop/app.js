@@ -207,7 +207,8 @@ const pages = {}; // wird unten gefüllt, wenn alle Seiten definiert sind
 function route() {
   const [page, ...args] = (location.hash.replace('#/', '') || 'mitarbeiter').split('/');
   const render = (m) => (pages[page] ?? mitarbeiter)(m, ...args);
-  document.querySelectorAll('.menu a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
+  const menuPage = page === 'mitarbeiter' && args.length ? 'tag' : page; // Mitarbeiter mit Tag = Tagesansicht
+  document.querySelectorAll('.menu a').forEach((a) => a.classList.toggle('active', a.dataset.page === menuPage));
   const main = $('main');
   main.classList.remove('wide'); // nur die Wochenansicht füllt die ganze Breite
   main.replaceChildren(h('p', { class: 'sub' }, 'Lädt …'));
@@ -248,6 +249,7 @@ function reportPeriod(type, v) {
 }
 
 async function berichte(main) {
+  main.classList.add('wide');
   const customers = (await api('/customers')).filter((c) => !c.archived);
   const today = new Date();
   const COLS = [
@@ -388,9 +390,10 @@ async function berichte(main) {
   main.replaceChildren(
     h('h1', {}, 'Berichte'),
     h('p', { class: 'sub' }, 'Kundenbericht (Stundennachweis) als PDF. Alle Arbeitskräfte, die beim Kunden gearbeitet haben, kommen automatisch hinein.'),
+    h('div', { class: 'rgrid' },
     h(
       'div',
-      { class: 'card' },
+      { class: 'card rform' },
       h('h2', {}, 'Kundenbericht'),
       h('label', { for: 'rb-kunde' }, 'Kunde'),
       customerSel,
@@ -412,14 +415,26 @@ async function berichte(main) {
       status,
     ),
     previewBox,
+    ),
   );
   formCard = main.querySelector('.card');
   formCard.addEventListener('change', refreshIfOpen);
 }
 const statistik = placeholder('Statistik', 'Stunden und Umsatz pro Monat, Kunde und Projekt.', 'Schritt 7');
 
+// --- Tagesansicht (Menüpunkt): zuletzt angesehener Mitarbeiter, heutiger Tag -----------
+async function tag(main, userArg, dateStr) {
+  const users = (await api('/users')).filter((u) => u.active);
+  if (!users.length) throw new Error('Noch keine Mitarbeiter.');
+  const last = Number(storage('get', 'spur-last-user'));
+  const uid = Number(userArg) || (users.find((u) => u.id === last) ?? users.find((u) => u.role !== 'admin') ?? users[0]).id;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(dateStr ?? '') ? dateStr : toDateStr(new Date());
+  location.replace(`#/mitarbeiter/${uid}/${day}`);
+}
+
 // --- Mitarbeiter -----------------------------------------------------------
 async function mitarbeiter(main, userId, dateStr) {
+  if (userId) storage('set', 'spur-last-user', String(Number(userId)));
   if (userId) return tagesansicht(main, Number(userId), dateStr);
   const users = await api('/users');
 
@@ -722,12 +737,18 @@ async function kunden(main) {
     for (const r of customerRows) r.style.display = !q || r.dataset.search.includes(q) ? '' : 'none';
   };
 
+  const jump = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   main.replaceChildren(
     h('h1', {}, 'Kunden und Projekte'),
     h('p', { class: 'sub' }, 'Kunden mit ihren Baustellen. Aktive Baustellen erscheinen in der Handy-App als Kacheln und werden dort automatisch erkannt.'),
+    h('div', { class: 'jumpbar' },
+      h('span', { class: 'hint', style: 'margin:0' }, 'Springen zu:'),
+      h('button', { type: 'button', onclick: () => jump('sec-kunden') }, `Kunden (${visibleCustomers.length})`),
+      h('button', { type: 'button', onclick: () => jump('sec-baustellen') }, `Baustellen (${siteRows.length})`),
+      h('button', { type: 'button', onclick: () => jump('sec-haendler') }, `Händler (${haendlerRows.length})`)),
     h(
       'div',
-      { class: 'card' },
+      { class: 'card', id: 'sec-kunden' },
       h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Kunden'), h('button', { class: 'primary', onclick: () => customerDialog(null) }, 'Neuer Kunde')),
       customerRows.length ? customerSearch : null,
       customerRows.length
@@ -737,7 +758,7 @@ async function kunden(main) {
     ),
     h(
       'div',
-      { class: 'card' },
+      { class: 'card', id: 'sec-baustellen' },
       h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Baustellen'), h('button', { class: 'primary', onclick: () => siteDialog(null, customers) }, 'Neue Baustelle')),
       siteRows.length
         ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Baustelle'), h('th', {}, 'Kunde'), h('th', {}, 'Adresse'), h('th', {}, 'Erkennung'), h('th', {}, 'Aktiv'), h('th', {}, ''))), h('tbody', {}, siteRows))
@@ -745,7 +766,7 @@ async function kunden(main) {
     ),
     h(
       'div',
-      { class: 'card' },
+      { class: 'card', id: 'sec-haendler' },
       h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin-bottom:10px' }, h('h2', { style: 'margin:0' }, 'Händler (Baumarkt, Großhandel)'), h('button', { onclick: () => siteDialog(null, customers, 'haendler') }, 'Neuer Händler')),
       haendlerRows.length
         ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Händler'), h('th', {}, 'Adresse'), h('th', {}, 'Erkennung'), h('th', {}, 'Aktiv'), h('th', {}, ''))), h('tbody', {}, haendlerRows))
@@ -1595,6 +1616,7 @@ async function woche(main, userArg, dateStr) {
   if (!users.length) throw new Error('Noch keine Mitarbeiter.');
   const userId = Number(userArg) || (users.find((u) => u.role !== 'admin') ?? users[0]).id;
   const user = users.find((u) => u.id === userId) ?? users[0];
+  storage('set', 'spur-last-user', String(user.id));
   const base = /^\d{4}-\d{2}-\d{2}$/.test(dateStr ?? '') ? new Date(...dateStr.split('-').map((n, i) => (i === 1 ? Number(n) - 1 : Number(n)))) : new Date();
   const mon = mondayOf(base);
   const dates = [...Array(7)].map((_, i) => new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i));
@@ -2252,7 +2274,7 @@ async function lohn(main) {
   if (users.length) show();
 }
 
-Object.assign(pages, { mitarbeiter, woche, kunden, berichte, statistik, einstellungen, belege, lohn });
+Object.assign(pages, { mitarbeiter, tag, woche, kunden, berichte, statistik, einstellungen, belege, lohn });
 
 (async function init() {
   token = storage('get', 'spur-token');
