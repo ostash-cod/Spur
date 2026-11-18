@@ -1488,6 +1488,96 @@ fun ReportsScreen(now: Long, siteMap: Map<Long, SiteRow>) {
         Text("Woche abgeben", fontWeight = FontWeight.Bold, fontSize = 20.sp)
         Text("Am Ende der Woche schickst du hier alle Zettel von Montag bis heute an den Chef. Einzelne Tage kannst du schon vorher auf dem Heute-Bildschirm abgeben.")
         WeekSubmitButton(now, siteMap)
+        WeekSheetsSection(siteMap)
+    }
+}
+
+/** Wochenzettel vom Chef: prüfen, dann „geprüft und einverstanden“ oder „Etwas stimmt nicht“. */
+@Composable
+fun WeekSheetsSection(siteMap: Map<Long, SiteRow>) {
+    val ctx = LocalContext.current
+    var sheets by remember { mutableStateOf<List<org.json.JSONObject>>(emptyList()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reload) {
+        val token = Prefs.token(ctx) ?: return@LaunchedEffect
+        val res = withContext(Dispatchers.IO) {
+            runCatching {
+                val arr = Api.getArray(ctx, "/api/week-sheets", token)
+                List(arr.length()) { arr.getJSONObject(it) }
+            }
+        }
+        res.onSuccess { sheets = it; error = null }.onFailure { error = "Keine Verbindung. Die Wochenzettel werden später geladen." }
+    }
+    val shown = sheets.filter { it.optString("status") != "confirmed" }.take(3) + sheets.filter { it.optString("status") == "confirmed" }.take(2)
+    if (shown.isEmpty() && error == null) return
+    Text("Wochenzettel vom Chef", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+    error?.let { Text(it, color = Color(0xFF6A6F75), fontSize = 13.sp) }
+    for (w in shown) WeekSheetCard(w) { reload++ }
+}
+
+private fun weekTime(ms: Long): String =
+    java.time.Instant.ofEpochMilli(ms).atZone(ZoneId.of("Europe/Berlin")).toLocalTime().toString().take(5)
+
+private fun weekHours(ms: Long): String = "${ms / 3_600_000}:${((ms % 3_600_000) / 60_000).toString().padStart(2, '0')} Std."
+
+@Composable
+fun WeekSheetCard(w: org.json.JSONObject, onChanged: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snap = w.getJSONObject("snapshot")
+    val status = w.optString("status")
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    var rejecting by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("") }
+    fun send(path: String, body: org.json.JSONObject) {
+        val token = Prefs.token(ctx) ?: return
+        busy = true
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { runCatching { Api.post(ctx, path, body, token) } }
+            busy = false
+            r.onSuccess { rejecting = false; onChanged() }.onFailure { msg = it.message ?: "Das hat nicht geklappt." }
+        }
+    }
+    androidx.compose.material3.Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Woche ${snap.getString("week_start").split("-").reversed().take(2).reversed().joinToString(".")}. bis ${snap.getString("week_end").split("-").reversed().take(2).reversed().joinToString(".")}. (KW ${snap.getInt("kw")})", fontWeight = FontWeight.Bold)
+            val days = snap.getJSONArray("days")
+            for (i in 0 until days.length()) {
+                val d = days.getJSONObject(i)
+                val date = d.getString("date").split("-").reversed().take(2).reversed().joinToString(".")
+                Text("$date.  ${weekTime(d.getLong("start"))} bis ${weekTime(d.getLong("end"))} · Pause ${d.getInt("pause_min")} Min · ${weekHours(d.getLong("paid_ms"))}")
+                val lines = d.getJSONArray("lines")
+                for (j in 0 until lines.length()) {
+                    val l = lines.getJSONObject(j)
+                    val label = when (l.getString("kind")) {
+                        "work" -> if (l.isNull("site_name")) "Baustelle" else l.getString("site_name")
+                        "travel" -> "Fahrt" + (if (!l.isNull("km")) ", ${l.getDouble("km").toString().replace('.', ',')} km" else "")
+                        "break" -> "Pause"
+                        else -> "Privat"
+                    }
+                    Text("   ${weekTime(l.getLong("from"))}–${weekTime(l.getLong("to"))}  $label", fontSize = 13.sp, color = Color(0xFF6A6F75))
+                }
+            }
+            Text("Summe: ${weekHours(snap.getLong("total_paid_ms"))} · Privatauto ${snap.getDouble("km_privat").toString().replace('.', ',')} km", fontWeight = FontWeight.Bold)
+            when (status) {
+                "confirmed" -> Text("✅ Von dir bestätigt. Diese Woche ist gesperrt.", color = Color(0xFF2E7D32))
+                "rejected" -> Text("Du hast gemeldet: „${w.optString("reject_note")}“. Der Chef schickt die Woche neu.", color = Color(0xFF6A6F75))
+                else -> {
+                    Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = { send("/api/week-sheets/${w.getInt("id")}/confirm", org.json.JSONObject().put("agree", true)) }) {
+                        Text("Ich habe die Datei geprüft und bin einverstanden", fontWeight = FontWeight.Bold)
+                    }
+                    if (!rejecting) {
+                        OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = { rejecting = true }) { Text("Etwas stimmt nicht") }
+                    } else {
+                        androidx.compose.material3.OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("Was stimmt nicht?") }, modifier = Modifier.fillMaxWidth())
+                        Button(enabled = !busy && note.isNotBlank(), onClick = { send("/api/week-sheets/${w.getInt("id")}/reject", org.json.JSONObject().put("note", note.trim())) }) { Text("An den Chef schicken") }
+                    }
+                }
+            }
+            msg?.let { Text(it, color = Color(0xFFB3261E), fontSize = 13.sp) }
+        }
     }
 }
 

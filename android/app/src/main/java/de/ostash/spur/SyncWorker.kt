@@ -119,7 +119,7 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                     Api.post(ctx, "/api/sheets", JSONObject(json), token)
                     db.sheetSent(date, json)
                 } catch (e: Api.ApiException) {
-                    if (e.code != 400) throw e
+                    if (e.code != 400 && e.code != 409) throw e // 409: Woche ist bestätigt und gesperrt
                     db.sheetSent(date, json)
                 }
             }

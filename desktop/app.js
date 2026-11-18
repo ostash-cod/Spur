@@ -1336,6 +1336,52 @@ function tripDialog(day, trip, sites) {
   );
 }
 
+// Zettel vom Mitarbeiter korrigieren (Chef). Gespeichert wird nur der neue Stand, kein Änderungsverlauf.
+function sheetEditDialog(sh, siteById, done) {
+  const hm = (ms) => { const x = new Date(ms); return `${pad2(x.getHours())}:${pad2(x.getMinutes())}`; };
+  const toMs = (v, fallback) => (/^\d{2}:\d{2}$/.test(v) ? new Date(`${sh.date}T${v}`).getTime() : fallback);
+  const err = h('p', { class: 'error' });
+  const timeIn = (ms) => h('input', { type: 'time', step: 300, value: hm(ms), style: 'width:auto' });
+  const start = timeIn(sh.start);
+  const end = timeIn(sh.end);
+  const pause = h('input', { type: 'number', min: 0, max: 600, step: 5, value: sh.pause_min, style: 'width:80px' });
+  const label = (l) => (l.kind === 'work' ? siteById.get(l.site_id)?.name ?? 'Baustelle' : { travel: 'Fahrt', break: 'Pause', private: 'Privat' }[l.kind]);
+  const rows = sh.lines.map((l) => ({
+    l,
+    from: timeIn(l.from),
+    to: timeIn(l.to),
+    km: l.kind === 'travel' ? h('input', { type: 'number', min: 0, step: 0.1, value: l.km ?? '', style: 'width:80px' }) : null,
+    vehicle: l.kind === 'travel' ? h('select', {}, h('option', { value: 'privat', selected: l.vehicle !== 'firma' }, 'Privatauto'), h('option', { value: 'firma', selected: l.vehicle === 'firma' }, 'Firmenauto')) : null,
+  }));
+  const dlg = openDialog(
+    h('h2', {}, `Zettel vom ${sh.date.split('-').reverse().join('.')} bearbeiten`),
+    h('p', { class: 'hint' }, 'Der Mitarbeiter bestätigt am Ende der Woche den Stand, den du schickst.'),
+    h('p', {}, 'Beginn ', start, ' Ende ', end, ' Pause (Min) ', pause),
+    h('table', {}, h('tbody', {}, ...rows.map((r) => h('tr', {},
+      h('td', {}, r.from, ' bis ', r.to), h('td', {}, label(r.l)), h('td', {}, r.vehicle ?? ''), h('td', {}, r.km ? [r.km, ' km'] : ''))))),
+    err,
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', onclick: async () => {
+        try {
+          const lines = rows.map((r) => ({
+            kind: r.l.kind, site_id: r.l.site_id ?? null, from: toMs(r.from.value, r.l.from), to: toMs(r.to.value, r.l.to),
+            km: r.km && r.km.value !== '' ? Number(r.km.value) : r.l.km ?? null, vehicle: r.vehicle ? r.vehicle.value : r.l.vehicle ?? null,
+          }));
+          await api(`/sheets/${sh.id}`, { method: 'PUT', body: { start: toMs(start.value, sh.start), end: toMs(end.value, sh.end), pause_min: Number(pause.value) || 0, lines } });
+          dlg.close();
+          done();
+        } catch (ex) { err.textContent = ex.message; }
+      } }, 'Speichern'),
+      h('button', { onclick: () => dlg.close() }, 'Abbrechen')),
+  );
+}
+
+async function openPdf(path) {
+  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error('PDF nicht ladbar');
+  window.open(URL.createObjectURL(await res.blob()), '_blank');
+}
+
 async function tagesansicht(main, userId, dateStr) {
   const users = await api('/users');
   const user = users.find((u) => u.id === userId);
@@ -1379,7 +1425,7 @@ async function tagesansicht(main, userId, dateStr) {
         const label = (l) => (l.kind === 'work' ? siteById.get(l.site_id)?.name ?? 'Baustelle' : { travel: 'Fahrt', break: 'Pause', private: 'Privat' }[l.kind]);
         return h('div', { class: 'card' },
           h('h2', {}, `Zettel vom Mitarbeiter · ${fmtTime(sh.start)} bis ${fmtTime(sh.end)}`),
-          h('p', { class: 'hint' }, `Abgegeben ${fmtTime(sh.submitted_at)} Uhr`),
+          h('p', { class: 'hint' }, `Abgegeben ${fmtTime(sh.submitted_at)} Uhr `, h('button', { onclick: () => sheetEditDialog(sh, siteById, () => route()) }, 'Zettel bearbeiten')),
           h('table', {}, h('tbody', {}, ...sh.lines.map((l) => h('tr', {},
             h('td', {}, `${fmtTime(l.from)} bis ${fmtTime(l.to)}`),
             h('td', {}, label(l)),
@@ -1479,6 +1525,7 @@ async function woche(main, userArg, dateStr) {
     api(`/photos?from=${from}&to=${to}&user_id=${user.id}`).catch(() => []),
     api(`/sheets?from=${toDateStr(dates[0])}&to=${toDateStr(dates[6])}&user_id=${user.id}`).catch(() => []),
   ]);
+  const weekSheet = (await api(`/week-sheets?from=${toDateStr(dates[0])}&to=${toDateStr(dates[0])}&user_id=${user.id}`).catch(() => []))[0] ?? null;
   const siteById = new Map(sites.map((x) => [x.id, x]));
   const rateOf = (site) => customers.find((c) => c.id === site?.customer_id)?.hourly_rate ?? null;
   const go = (d, uid = user.id) => (location.hash = `#/woche/${uid}/${toDateStr(d)}`);
@@ -1750,6 +1797,25 @@ async function woche(main, userArg, dateStr) {
           ...loose.map((n) => h('div', { class: 'wnote loose' }, n.text)),
         )),
       ),
+    ),
+    h('div', { class: 'card' },
+      h('h2', {}, 'Wochenzettel'),
+      (() => {
+        const st = weekSheet?.status;
+        const msg = !weekSheet ? 'Noch nicht an den Mitarbeiter geschickt.'
+          : st === 'confirmed' ? `Bestätigt von ${user.name} am ${new Date(weekSheet.confirmed_at).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} Uhr. Gesperrt.`
+          : st === 'rejected' ? `${user.name} sagt: „${weekSheet.reject_note}“ Bitte prüfen, korrigieren und neu schicken.`
+          : `Geschickt am ${new Date(weekSheet.sent_at).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} Uhr. Wartet auf die Bestätigung.`;
+        return h('p', { class: st === 'confirmed' ? 'hint ok' : st === 'rejected' ? 'hint warn' : 'hint' }, msg);
+      })(),
+      h('div', { class: 'actions' },
+        weekSheet?.status === 'confirmed' ? null : h('button', { class: 'primary', onclick: async (e) => {
+          const wanted = weekSheet ? 'Die Woche wird mit dem aktuellen Stand neu geschickt.' : `Die Woche geht jetzt an ${user.name}. Alle Tageszettel dieser Woche werden mitgeschickt.`;
+          if (!confirm(`${wanted}\n\nPrüfe vorher bitte, ob alle Tage stimmen.`)) return;
+          try { await api('/week-sheets', { method: 'POST', body: { user_id: user.id, week_start: toDateStr(dates[0]) } }); route(); }
+          catch (ex) { alert(ex.message); }
+        } }, weekSheet ? 'Neu an den Mitarbeiter schicken' : 'Woche an den Mitarbeiter schicken'),
+        weekSheet ? h('button', { onclick: () => openPdf(`/week-sheets/${weekSheet.id}/pdf`).catch((ex) => alert(ex.message)) }, 'PDF ansehen') : null),
     ),
     h('p', { class: 'hint' }, 'Klick auf einen Block: Zeit, Betrag, Notiz und Fotos, dazu Bearbeiten, Teilen und Löschen. Klick auf den Tag oben: Tagesansicht.'),
   );

@@ -7,6 +7,7 @@ import { registerSiteRoutes } from './sites.js';
 import { registerReportRoutes } from './report-routes.js';
 import { registerNoteRoutes } from './notes.js';
 import { registerSheetRoutes } from './sheets.js';
+import { registerWeekSheetRoutes } from './weeksheets.js';
 import { registerReceiptRoutes } from './receipts.js';
 import { registerPayrollRoutes } from './payroll.js';
 import { mkdtempSync } from 'node:fs';
@@ -546,7 +547,8 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
   registerSiteRoutes(app, { db, requireUser, requireAdmin, fetchImpl });
   registerReportRoutes(app, { db, requireAdmin });
   registerNoteRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
-  registerSheetRoutes(app, { db, requireUser });
+  registerSheetRoutes(app, { db, requireUser, requireAdmin });
+  registerWeekSheetRoutes(app, { db, requireUser, requireAdmin });
   registerPayrollRoutes(app, { db, requireAdmin });
   registerReceiptRoutes(app, { db, requireUser, requireAdmin, photoDir: PHOTO_DIR });
 

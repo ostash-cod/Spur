@@ -118,6 +118,17 @@ CREATE TABLE IF NOT EXISTS sheets (
   data TEXT NOT NULL,
   UNIQUE (user_id, date)
 );
+CREATE TABLE IF NOT EXISTS week_sheets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  week_start TEXT NOT NULL,
+  status TEXT NOT NULL,
+  snapshot TEXT NOT NULL,
+  sent_at INTEGER NOT NULL,
+  confirmed_at INTEGER,
+  reject_note TEXT,
+  UNIQUE (user_id, week_start)
+);
 CREATE TABLE IF NOT EXISTS photos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id),
