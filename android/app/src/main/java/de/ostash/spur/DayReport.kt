@@ -214,6 +214,8 @@ fun queueSheetJson(db: Db, day: DayRow, start: Long, end: Long, pauseMin: Int, l
     }
     val json = JSONObject().put("date", date).put("start", start).put("end", end).put("pause_min", pauseMin).put("lines", arr).toString()
     db.queueSheet(date, json)
+    // Mit dem Abgeben werden die rohen GPS-Punkte dieses Tages gelöscht (nur wenn der Tag beendet ist).
+    if (day.endedAt != null) runCatching { db.purgeDayPoints(day.id, onlySynced = false) }
 }
 
 /** Der Zettel zum Tagesende: Abschnitte, Fahrzeug und Kilometer prüfen, Pause einstellen, abgeben. */

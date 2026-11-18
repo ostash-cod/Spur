@@ -478,6 +478,14 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
             "SELECT DISTINCT d.id FROM days d JOIN points p ON p.day_id = d.id WHERE d.ended_at IS NOT NULL AND d.ended_at < ?",
             arrayOf(endedBefore.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
+        return purgeDays(days, onlySynced)
+    }
+
+    /** Beim Abgeben: Punkte dieses (beendeten) Tages sofort löschen, die Kilometer bleiben. */
+    @Synchronized
+    fun purgeDayPoints(dayId: Long, onlySynced: Boolean): Int = purgeDays(listOf(dayId), onlySynced)
+
+    private fun purgeDays(days: List<Long>, onlySynced: Boolean): Int {
         var removed = 0
         val w = writableDatabase
         for (dayId in days) {
