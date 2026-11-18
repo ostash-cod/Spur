@@ -1579,7 +1579,8 @@ async function tagesansicht(main, userId, dateStr) {
 
   main.replaceChildren(
     h('p', { class: 'hint' }, h('a', { href: '#/mitarbeiter' }, '← Alle Mitarbeiter')),
-    h('h1', {}, user.name),
+    h('div', { class: 'whead', style: 'margin:0' }, h('select', { class: 'wuser', 'aria-label': 'Mitarbeiter wechseln', onchange: (e) => (location.hash = `#/mitarbeiter/${e.target.value}/${date}`) },
+      ...users.map((u) => h('option', { value: u.id, selected: u.id === user.id }, u.name)))),
     h(
       'div',
       { class: 'actions', style: 'margin:10px 0 18px;align-items:center' },
