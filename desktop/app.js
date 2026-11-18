@@ -209,6 +209,7 @@ function route() {
   const render = (m) => (pages[page] ?? mitarbeiter)(m, ...args);
   document.querySelectorAll('.menu a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
   const main = $('main');
+  main.classList.remove('wide'); // nur die Wochenansicht füllt die ganze Breite
   main.replaceChildren(h('p', { class: 'sub' }, 'Lädt …'));
   render(main).catch((err) => main.replaceChildren(h('p', { class: 'error' }, err.message)));
 }
@@ -1571,7 +1572,7 @@ async function tagesansicht(main, userId, dateStr) {
 }
 
 // --- Wochenansicht pro Mitarbeiter (Vorbild Clockodo) ---------------------------------
-const WEEK_PX_PER_MIN = 0.9;
+let WEEK_PX_PER_MIN = 1.4; // wird je nach Bildschirmhöhe gesetzt (mindestens 1,3, höchstens 1,8 Pixel pro Minute)
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 function mondayOf(d) {
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -1631,6 +1632,9 @@ async function woche(main, userArg, dateStr) {
   const hourOf = (ms) => { const x = new Date(ms); return x.getHours() + x.getMinutes() / 60; };
   let h0 = 7, h1 = 17;
   for (const pd of perDay) for (const b of pd.blocks) { h0 = Math.min(h0, Math.floor(hourOf(b.start))); h1 = Math.max(h1, Math.ceil(hourOf(b.end))); }
+  // Die Ansicht füllt den ganzen Bildschirm: Breite über CSS, Höhe über die Pixel pro Minute.
+  main.classList.add('wide');
+  WEEK_PX_PER_MIN = Math.min(1.8, Math.max(1.3, (window.innerHeight - 230) / ((h1 - h0) * 60)));
   const colH = (h1 - h0) * 60 * WEEK_PX_PER_MIN;
   const yOf = (ms, d) => ((ms - new Date(d.getFullYear(), d.getMonth(), d.getDate(), h0).getTime()) / 60000) * WEEK_PX_PER_MIN;
 
@@ -1674,7 +1678,7 @@ async function woche(main, userArg, dateStr) {
       if (note) shownNotes.add(b.site.id);
     }
     const nPhotos = b.type === 'site' && b.site && !b.site.system ? photosFor(b).length : 0;
-    const el = h('div', { class: 'wblock', tabindex: 0, role: 'button', style: `top:${top}px;height:${height}px;background:${bg};color:${fg}` },
+    const el = h('div', { class: `wblock${height < 56 ? ' wshort' : ''}`, tabindex: 0, role: 'button', style: `top:${top}px;height:${height}px;background:${bg};color:${fg}` },
       h('strong', {}, title),
       sub ? h('div', { class: 'wsub' }, sub) : null,
       note ? h('div', { class: 'wnote' }, note.text) : null,
@@ -1862,7 +1866,7 @@ async function woche(main, userArg, dateStr) {
       h('h1', { style: 'margin:0' }, monthName, h('span', { class: 'wkw' }, ` / KW ${isoWeek(dates[3])}`)),
     ),
     h('div', { class: 'card wcard' },
-      h('div', { class: 'wgrid', style: `grid-template-columns:76px ${perDay.map((pd, i) => (i >= 5 && !pd.list.length ? 'minmax(70px,0.5fr)' : 'minmax(120px,1fr)')).join(' ')}` },
+      h('div', { class: 'wgrid', style: `grid-template-columns:76px ${perDay.map((pd, i) => 'minmax(120px,1fr)').join(' ')}` },
         h('div', { class: 'wsum' }, h('div', { class: 'hint' }, 'Woche'), h('strong', {}, fmtH(totalWork)), totalMoney ? h('div', {}, fmtEuro(totalMoney)) : null),
         ...cols.map(({ pd, i }) => h('div', { class: `wday${pd.key === today ? ' today' : ''}`, onclick: () => (location.hash = `#/mitarbeiter/${user.id}/${pd.key}`), title: 'Tagesansicht öffnen' },
           h('strong', {}, `${pad2(pd.d.getDate())} ${WEEKDAYS[i]}`))),
@@ -2265,3 +2269,10 @@ Object.assign(pages, { mitarbeiter, woche, kunden, berichte, statistik, einstell
 
 // Installierbar machen (Symbol auf dem Desktop).
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+// Wochenansicht: bei Größenänderung des Fensters neu zeichnen (Höhe der Stunden passt sich an).
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (me && $('main').classList.contains('wide')) route(); }, 300);
+});
