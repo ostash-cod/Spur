@@ -200,11 +200,21 @@ fun queueSheetFor(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, f
     queueSheetJson(db, day, day.startedAt, end, pauseMin, lines)
 }
 
-fun queueSheetJson(db: Db, day: DayRow, start: Long, end: Long, pauseMin: Int, lines: List<SheetLine>) {
+/** Alle Zeiten auf dem Zettel gehen auf die nächsten 5 Minuten: so sieht man dem Zettel nicht an, wie er entstanden ist. */
+fun roundTo5(ms: Long): Long = Math.floorDiv(ms + 150_000L, 300_000L) * 300_000L
+
+fun roundPause5(min: Int): Int = ((min + 2) / 5) * 5
+
+fun queueSheetJson(db: Db, day: DayRow, startRaw: Long, endRaw: Long, pauseRaw: Int, linesRaw: List<SheetLine>) {
+    val start = roundTo5(startRaw)
+    val end = maxOf(roundTo5(endRaw), start)
+    val pauseMin = roundPause5(pauseRaw)
+    val lines = linesRaw.filter { roundTo5(it.to) > roundTo5(it.from) }
+
     val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     val arr = JSONArray()
     for (l in lines) {
-        val o = JSONObject().put("kind", l.kind).put("from", l.from).put("to", l.to)
+        val o = JSONObject().put("kind", l.kind).put("from", roundTo5(l.from)).put("to", roundTo5(l.to))
         if (l.siteId != null) o.put("site_id", l.siteId)
         if (l.kind == "travel") {
             o.put("vehicle", l.vehicle)

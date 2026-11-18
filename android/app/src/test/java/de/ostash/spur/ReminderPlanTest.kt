@@ -110,3 +110,15 @@ class HolidaysTest {
         assertEquals(ZonedDateTime.of(d("2027-01-01"), LocalTime.of(6, 55), zone), ReminderPlan.next(after, ReminderConfig(skipHolidays = false), null))
     }
 }
+
+class RoundTo5Test {
+    private fun t(h: Int, m: Int, s: Int = 0) = ((h * 60L + m) * 60 + s) * 1000
+    @org.junit.Test fun rounds() {
+        org.junit.Assert.assertEquals(t(7, 5), roundTo5(t(7, 3)))
+        org.junit.Assert.assertEquals(t(7, 0), roundTo5(t(7, 2, 29)))
+        org.junit.Assert.assertEquals(t(7, 5), roundTo5(t(7, 2, 30)))
+        org.junit.Assert.assertEquals(t(7, 0), roundTo5(t(7, 0)))
+        org.junit.Assert.assertEquals(30, roundPause5(31))
+        org.junit.Assert.assertEquals(35, roundPause5(33))
+    }
+}
