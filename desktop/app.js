@@ -1376,10 +1376,95 @@ function sheetEditDialog(sh, siteById, done) {
   );
 }
 
+// --- Foto-Ansicht: großes Bild im Programm, mit Pfeilen links und rechts und Schließen-Knopf -----
+// Wichtig: Es öffnet sich KEIN neues Fenster. Das Kreuz schließt nur die Ansicht, nicht das ganze Programm.
+const photoUrls = new Map();
+async function photoUrl(id) {
+  if (photoUrls.has(id)) return photoUrls.get(id);
+  const res = await fetch(`/api/photos/${id}/file`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error('Foto nicht ladbar');
+  const u = URL.createObjectURL(await res.blob());
+  photoUrls.set(id, u);
+  return u;
+}
+
+// items: [{ id, caption }], start: Nummer des Bildes, das zuerst erscheint
+function photoViewer(items, start = 0) {
+  let i = Math.min(Math.max(start, 0), items.length - 1);
+  const img = h('img', { alt: 'Foto', class: 'viewer-img' });
+  const cap = h('div', { class: 'viewer-cap' });
+  const msg = h('div', { class: 'viewer-msg' });
+  const prev = h('button', { class: 'viewer-nav viewer-prev', type: 'button', 'aria-label': 'Voriges Foto' }, '‹');
+  const next = h('button', { class: 'viewer-nav viewer-next', type: 'button', 'aria-label': 'Nächstes Foto' }, '›');
+  const close = h('button', { class: 'viewer-close', type: 'button', 'aria-label': 'Schließen' }, '✕');
+  const dlg = h('dialog', { class: 'viewer' }, close, prev, next, h('div', { class: 'viewer-stage' }, img, msg), cap);
+  const show = async () => {
+    const my = i;
+    const it = items[i];
+    cap.textContent = `${i + 1} von ${items.length}${it.caption ? ' · ' + it.caption : ''}`;
+    prev.disabled = i === 0;
+    next.disabled = i === items.length - 1;
+    prev.style.visibility = next.style.visibility = items.length > 1 ? 'visible' : 'hidden';
+    msg.textContent = 'Lädt …';
+    img.removeAttribute('src');
+    try {
+      const u = await photoUrl(it.id);
+      if (my !== i) return;
+      img.src = u;
+      msg.textContent = '';
+    } catch (ex) {
+      if (my === i) msg.textContent = ex.message;
+    }
+    // das nächste Bild schon im Hintergrund laden
+    if (items[my + 1]) photoUrl(items[my + 1].id).catch(() => {});
+  };
+  const go = (d) => { const n = i + d; if (n >= 0 && n < items.length) { i = n; show(); } };
+  prev.onclick = () => go(-1);
+  next.onclick = () => go(1);
+  close.onclick = () => dlg.close();
+  // Pfeiltasten am ganzen Fenster (nicht nur am Dialog), sonst gehen sie verloren, wenn ein Knopf gesperrt ist
+  const onKey = (e) => {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); go(1); }
+  };
+  document.addEventListener('keydown', onKey);
+  // Klick auf den dunklen Rand schließt die Ansicht
+  dlg.addEventListener('click', (e) => { if (e.target === dlg || e.target.classList.contains('viewer-stage')) dlg.close(); });
+  // Wischen mit dem Finger (Touch)
+  let x0 = null;
+  dlg.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+  dlg.addEventListener('touchend', (e) => {
+    if (x0 == null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
+  });
+  dlg.addEventListener('close', () => { document.removeEventListener('keydown', onKey); dlg.remove(); });
+  document.body.append(dlg);
+  dlg.showModal();
+  show();
+}
+
+// PDF und Belege: ebenfalls in einem Fenster im Programm statt in einem neuen Fenster.
+function fileViewer(blob, title) {
+  const url = URL.createObjectURL(blob);
+  const isImg = (blob.type || '').startsWith('image/');
+  const close = h('button', { class: 'viewer-close', type: 'button', 'aria-label': 'Schließen' }, '✕');
+  const body = isImg
+    ? h('div', { class: 'viewer-stage' }, h('img', { alt: title, class: 'viewer-img', src: url }))
+    : h('div', { class: 'viewer-stage viewer-pdf' }, h('iframe', { src: url, title, class: 'viewer-frame' }));
+  const dlg = h('dialog', { class: 'viewer' }, close, body,
+    h('div', { class: 'viewer-cap' }, title, ' · ', h('a', { href: url, target: '_blank', rel: 'noopener', style: 'color:#f5c400' }, 'In neuem Fenster öffnen')));
+  close.onclick = () => dlg.close();
+  dlg.addEventListener('close', () => { dlg.remove(); URL.revokeObjectURL(url); });
+  document.body.append(dlg);
+  dlg.showModal();
+}
+
 async function openPdf(path) {
   const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error('PDF nicht ladbar');
-  window.open(URL.createObjectURL(await res.blob()), '_blank');
+  fileViewer(await res.blob(), 'Wochenzettel');
 }
 
 async function tagesansicht(main, userId, dateStr) {
@@ -1406,14 +1491,11 @@ async function tagesansicht(main, userId, dateStr) {
     }
     return null;
   };
+  const photoCaption = (p) => `${fmtTime(p.taken_at)}${photoSite(p) ? ' · ' + photoSite(p) : ''}`;
+  const photoItems = photos.map((q) => ({ id: q.id, caption: photoCaption(q) }));
   const photoView = (p) => {
     const img = h('img', { alt: 'Foto', style: 'width:160px;height:120px;object-fit:cover;border-radius:8px;cursor:pointer;background:#eee' });
-    const load = async () => {
-      const res = await fetch(`/api/photos/${p.id}/file`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error('Foto nicht ladbar');
-      return URL.createObjectURL(await res.blob());
-    };
-    load().then((u) => { img.src = u; img.onclick = () => window.open(u, '_blank'); }).catch(() => {});
+    photoUrl(p.id).then((u) => { img.src = u; img.onclick = () => photoViewer(photoItems, photos.indexOf(p)); }).catch(() => {});
     return h('div', { style: 'display:inline-block;margin:0 10px 10px 0;vertical-align:top' }, img,
       h('div', { class: 'hint' }, `${fmtTime(p.taken_at)}${photoSite(p) ? ' · ' + photoSite(p) : ''}`));
   };
@@ -1631,11 +1713,11 @@ async function woche(main, userArg, dateStr) {
       b.type === 'travel' ? h('p', { class: 'hint', style: 'margin-top:10px' }, 'Eine Fahrt ist die Zeit zwischen zwei Orten. Sie wird kürzer oder länger, wenn du die Abschnitte davor oder danach änderst.') : null,
     );
     if (nPhotos) {
-      for (const p of photosFor(b)) {
+      const blockPhotos = photosFor(b);
+      const blockItems = blockPhotos.map((q) => ({ id: q.id, caption: `${fmtTime(q.taken_at)} Uhr` }));
+      for (const p of blockPhotos) {
         const img = h('img', { alt: 'Foto', style: 'width:110px;height:82px;object-fit:cover;border-radius:6px;cursor:pointer;background:#eee' });
-        fetch(`/api/photos/${p.id}/file`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.blob()).then((bl) => {
-          const url = URL.createObjectURL(bl); img.src = url; img.onclick = () => window.open(url, '_blank');
-        }).catch(() => {});
+        photoUrl(p.id).then((url) => { img.src = url; img.onclick = () => photoViewer(blockItems, blockPhotos.indexOf(p)); }).catch(() => {});
         pics.append(img);
       }
     }
@@ -2033,7 +2115,7 @@ async function belege(main, siteArg) {
   const openFile = async (r) => {
     const res = await fetch(`/api/receipts/${r.id}/file`, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return alert('Beleg nicht ladbar');
-    window.open(URL.createObjectURL(await res.blob()), '_blank');
+    fileViewer(await res.blob(), 'Beleg');
   };
   const editAllocs = (r) => {
     const rows = r.allocs.map((a) => ({ ...a }));

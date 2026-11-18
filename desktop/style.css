@@ -138,3 +138,23 @@ button[aria-pressed='true'] { background: var(--text); color: #fff; border-color
 .wfootday .warn { color: #8a6d00; }
 .wnote.loose { margin-top: 6px; padding: 4px 6px; background: var(--grau); border-radius: 6px; white-space: pre-line; }
 .wnote-pop { margin: 10px 0 0; padding: 8px 10px; background: var(--grau); border-radius: 8px; white-space: pre-line; font-size: 0.92rem; }
+
+/* Foto-Ansicht (ganzer Bildschirm, ohne neues Fenster) */
+dialog.viewer[open] { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; margin: 0; padding: 0; border-radius: 0; background: rgba(15, 16, 18, 0.96); color: #fff; overflow: hidden; display: flex; flex-direction: column; }
+dialog.viewer::backdrop { background: rgba(0, 0, 0, 0.9); }
+.viewer-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; position: relative; padding: 56px 72px 8px; }
+.viewer-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+.viewer-msg { position: absolute; color: #ddd; }
+.viewer-img:not([src]) { display: none; }
+.viewer-cap { text-align: center; padding: 8px 16px 18px; color: #ddd; font-size: 0.95rem; }
+.viewer-close, .viewer-nav { position: absolute; z-index: 2; background: rgba(255, 255, 255, 0.16); color: #fff; border: 1px solid rgba(255, 255, 255, 0.3); cursor: pointer; }
+.viewer-close:hover, .viewer-nav:hover { background: var(--gelb); color: #1b1c1e; }
+.viewer-close { top: 12px; right: 14px; width: 48px; height: 48px; border-radius: 50%; font-size: 1.4rem; line-height: 1; padding: 0; }
+.viewer-nav { top: 50%; transform: translateY(-50%); width: 56px; height: 80px; border-radius: 12px; font-size: 2.6rem; line-height: 1; padding: 0; }
+.viewer-nav:disabled { opacity: 0.25; cursor: default; }
+.viewer-nav:disabled:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.viewer-prev { left: 10px; }
+.viewer-next { right: 10px; }
+@media (max-width: 760px) { .viewer-stage { padding: 56px 6px 8px; } .viewer-nav { width: 44px; height: 64px; opacity: 0.85; } }
+.viewer-pdf { padding: 56px 12px 4px; }
+.viewer-frame { width: 100%; height: 100%; border: 0; border-radius: 6px; background: #fff; }
