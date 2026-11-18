@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (Prefs.token(this) != null) SyncWorker.enqueue(this)
+        if (Prefs.token(this) != null) { SyncWorker.enqueue(this); WeekSheetWatcher.schedule(this) }
         val app = applicationContext
         Thread { PointCleanup.run(app) }.start() // Variante C: alte GPS-Punkte auf dem Handy löschen
     }

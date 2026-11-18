@@ -30,6 +30,8 @@ object Prefs {
     /** Nur Chef-Handy: Tag sofort zum Server schicken (zum Testen). Sonst erst nach "Tag abgeben". */
     fun liveSync(c: Context): Boolean = sp(c).getBoolean("live_sync", isAdmin(c))
     fun setLiveSync(c: Context, on: Boolean) { sp(c).edit().putBoolean("live_sync", on).apply() }
+    fun notifiedWeekSheets(c: Context): Set<String> = sp(c).getStringSet("notified_week_sheets", emptySet()) ?: emptySet()
+    fun setNotifiedWeekSheets(c: Context, v: Set<String>) { sp(c).edit().putStringSet("notified_week_sheets", v).apply() }
     fun canReceipts(c: Context): Boolean = sp(c).getBoolean("receipts", false)
     fun setCanReceipts(c: Context, v: Boolean) { sp(c).edit().putBoolean("receipts", v).apply() }
 
