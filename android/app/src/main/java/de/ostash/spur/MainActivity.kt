@@ -1387,6 +1387,19 @@ fun SettingsScreen() {
             color = Color(0xFF6A6F75), fontSize = 13.sp,
         )
 
+        if (Prefs.isAdmin(ctx)) {
+            var live by remember { mutableStateOf(Prefs.liveSync(ctx)) }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Mein Tag sofort an den Server (nur zum Testen)", Modifier.weight(1f))
+                Switch(checked = live, onCheckedChange = { live = it; Prefs.setLiveSync(ctx, it) })
+            }
+            Text(
+                if (live) "An: Dein Tag ist im Büro-Programm schon während des Tages zu sehen."
+                else "Aus: Der Tag bleibt auf dem Handy, bis du ihn abgibst. So ist es bei den Mitarbeitern.",
+                color = Color(0xFF6A6F75), fontSize = 13.sp,
+            )
+        }
+
         if (gpsOn) {
         Text("Mein Zuhause", fontWeight = FontWeight.Bold)
         var homeSet by remember { mutableStateOf(Prefs.home(ctx) != null) }

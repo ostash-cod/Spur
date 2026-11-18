@@ -27,6 +27,9 @@ object Prefs {
     /** GPS-Hilfe: freiwillig. Standard: aus für Mitarbeiter, an für den Chef (eigene Daten). Jeder stellt es am eigenen Handy ein. */
     fun gpsHelp(c: Context): Boolean = sp(c).getBoolean("gps_help", isAdmin(c))
     fun setGpsHelp(c: Context, on: Boolean) { sp(c).edit().putBoolean("gps_help", on).apply() }
+    /** Nur Chef-Handy: Tag sofort zum Server schicken (zum Testen). Sonst erst nach "Tag abgeben". */
+    fun liveSync(c: Context): Boolean = sp(c).getBoolean("live_sync", isAdmin(c))
+    fun setLiveSync(c: Context, on: Boolean) { sp(c).edit().putBoolean("live_sync", on).apply() }
     fun canReceipts(c: Context): Boolean = sp(c).getBoolean("receipts", false)
     fun setCanReceipts(c: Context, v: Boolean) { sp(c).edit().putBoolean("receipts", v).apply() }
 

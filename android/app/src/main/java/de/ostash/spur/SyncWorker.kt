@@ -57,6 +57,11 @@ class SyncWorker(private val ctx: Context, params: WorkerParameters) : Coroutine
                 },
             )
             for (day in db.daysNeedingSync()) {
+                // Entwurf bleibt auf dem Handy, bis der Tag abgegeben ist (Ausnahme: Live-Schalter am Chef-Handy).
+                if (!Prefs.liveSync(ctx)) {
+                    val date = java.time.Instant.ofEpochMilli(day.startedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+                    if (db.sheetState(date) == null) continue
+                }
                 var serverId = day.serverId
                 if (serverId == null || day.dirty) {
                     val body = JSONObject()
