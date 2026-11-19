@@ -483,3 +483,21 @@ test('Chef ändert Zeit: Nachbarn werden nach Rückfrage kürzer, verschoben ode
   // Der Abschnitt selbst darf kürzer werden
   assert.equal((await patch(sc.id, { started_at: t0 + 6.5 * H, ended_at: t0 + 7 * H, adjust_neighbors: true })).statusCode, 200);
 });
+
+test('Datenschutzhinweis: Bestätigung in der App wird gespeichert und dem Chef gezeigt', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Misha' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+  const auth = (t) => ({ authorization: `Bearer ${t}` });
+  assert.equal((await app2.inject({ url: '/api/me', headers: auth(wt) })).json().notice_version, null);
+  assert.equal((await app2.inject({ method: 'POST', url: '/api/me/notice', headers: auth(wt), payload: {} })).statusCode, 400);
+  assert.equal((await app2.inject({ method: 'POST', url: '/api/me/notice', headers: auth(wt), payload: { version: 'test-1', lang: 'uk' } })).statusCode, 200);
+  assert.equal((await app2.inject({ url: '/api/me', headers: auth(wt) })).json().notice_version, 'test-1');
+  const users = (await app2.inject({ url: '/api/users', headers: auth(at) })).json();
+  const m = users.find((u) => u.name === 'Misha');
+  assert.equal(m.notice_version, 'test-1');
+  assert.ok(m.notice_at > 0);
+});

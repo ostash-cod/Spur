@@ -234,6 +234,9 @@ export function openDb(path = ':memory:') {
   if (!hasColumn('segments', 'updated_at')) db.exec('ALTER TABLE segments ADD COLUMN updated_at INTEGER');
   if (!hasColumn('days', 'chef_edited')) db.exec('ALTER TABLE days ADD COLUMN chef_edited INTEGER NOT NULL DEFAULT 0');
   // Testmodus mit Karte: nur für den Chef, nur als Schalter. Dann schickt sein Handy den Weg an den Server.
+  if (!hasColumn('users', 'notice_version')) db.exec('ALTER TABLE users ADD COLUMN notice_version TEXT');
+  if (!hasColumn('users', 'notice_at')) db.exec('ALTER TABLE users ADD COLUMN notice_at INTEGER');
+  if (!hasColumn('users', 'notice_lang')) db.exec('ALTER TABLE users ADD COLUMN notice_lang TEXT');
   if (!hasColumn('users', 'gps_test')) db.exec('ALTER TABLE users ADD COLUMN gps_test INTEGER NOT NULL DEFAULT 0');
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {

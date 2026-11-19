@@ -42,6 +42,17 @@ object Prefs {
     /** Nach so vielen Stunden ab Tagesende werden die Punkte auf dem Handy gelöscht. */
     fun pointsHours(c: Context): Int = sp(c).getInt("points_hours", 48)
     fun setPointsHours(c: Context, v: Int) { sp(c).edit().putInt("points_hours", v.coerceIn(24, 168)).apply() }
+    // --- Datenschutzhinweis: Bestätigung mit Haken beim ersten Start ---
+    const val NOTICE_VERSION = "test-1"
+    fun noticeOk(c: Context): Boolean = sp(c).getString("notice_version", null) == NOTICE_VERSION
+    fun noticeSent(c: Context): Boolean = sp(c).getBoolean("notice_sent", false)
+    fun noticeLang(c: Context): String = sp(c).getString("notice_lang", "de") ?: "de"
+    fun noticeAt(c: Context): Long = sp(c).getLong("notice_at", 0L)
+    fun setNotice(c: Context, lang: String, at: Long, sent: Boolean) {
+        sp(c).edit().putString("notice_version", NOTICE_VERSION).putString("notice_lang", lang).putLong("notice_at", at).putBoolean("notice_sent", sent).apply()
+    }
+    fun setNoticeSent(c: Context) { sp(c).edit().putBoolean("notice_sent", true).apply() }
+
     fun lastSync(c: Context): Long = sp(c).getLong("last_sync", 0L)
 
     fun setLastSync(c: Context, ts: Long) = sp(c).edit().putLong("last_sync", ts).apply()

@@ -161,6 +161,16 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     points_hours: Number(getSettings(db).phone_points_hours) || 48,
   }));
 
+  // Bestätigung des Datenschutzhinweises in der App („Ich habe die Information gelesen“). Nur Beleg, keine Einwilligung.
+  app.post('/api/me/notice', { preHandler: requireUser }, async (req, reply) => {
+    const v = typeof req.body?.version === 'string' ? req.body.version.trim().slice(0, 40) : '';
+    const lang = ['de', 'uk', 'ru'].includes(req.body?.lang) ? req.body.lang : 'de';
+    if (!v) return reply.code(400).send({ error: 'Version fehlt' });
+    const at = Number.isFinite(req.body?.at) && req.body.at > 0 && req.body.at <= Date.now() + 60000 ? req.body.at : Date.now();
+    db.prepare('UPDATE users SET notice_version = ?, notice_at = ?, notice_lang = ? WHERE id = ?').run(v, at, lang, req.user.id);
+    return { ok: true };
+  });
+
   // --- Mitarbeiter (nur Chef) ---
   app.get('/api/users', { preHandler: requireAdmin }, async () =>
     db.prepare('SELECT * FROM users ORDER BY role, name').all().map(publicUser),

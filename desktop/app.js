@@ -442,7 +442,8 @@ async function mitarbeiter(main, userId, dateStr) {
     h(
       'tr',
       { class: u.active ? '' : 'inaktiv' },
-      h('td', {}, h('a', { href: `#/mitarbeiter/${u.id}` }, u.name), ' ', u.role === 'admin' ? h('span', { class: 'badge chef' }, 'Chef') : null),
+      h('td', {}, h('a', { href: `#/mitarbeiter/${u.id}` }, u.name), ' ', u.role === 'admin' ? h('span', { class: 'badge chef' }, 'Chef') : null,
+        h('div', { class: 'hint', style: 'margin:2px 0 0' }, u.notice_at ? `Hinweis gelesen: ${new Date(u.notice_at).toLocaleDateString('de-DE')}` : 'Hinweis noch nicht bestätigt')),
       h(
         'td',
         {},

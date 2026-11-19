@@ -143,7 +143,68 @@ fun SpurApp() {
             delay(2000)
         }
     }
-    if (!loggedIn) LoginScreen(onDone = { loggedIn = true }) else MainScreen()
+    var noticeOk by remember { mutableStateOf(Prefs.noticeOk(ctx)) }
+    if (!loggedIn) LoginScreen(onDone = { loggedIn = true })
+    else if (!noticeOk) NoticeScreen(onDone = { noticeOk = true })
+    else MainScreen()
+}
+
+/** Beim ersten Start: Hinweis zur Testphase lesen und mit Haken bestätigen. Der Beleg geht zum Server, wenn Internet da ist. */
+@Composable
+fun NoticeScreen(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var lang by remember { mutableStateOf(Prefs.noticeLang(ctx)) }
+    var checked by remember { mutableStateOf(false) }
+    val t = Notice.of(lang)
+    // Wer den Hinweis schon bestätigt hat (zum Beispiel nach Neuinstallation), muss nicht noch einmal.
+    LaunchedEffect(Unit) {
+        val me = withContext(Dispatchers.IO) { runCatching { Api.get(ctx, "/api/me", Prefs.token(ctx) ?: "") }.getOrNull() }
+        if (me != null && me.optString("notice_version") == Prefs.NOTICE_VERSION) {
+            Prefs.setNotice(ctx, Prefs.noticeLang(ctx), me.optLong("notice_at", System.currentTimeMillis()), true)
+            onDone()
+        }
+    }
+    Box(Modifier.fillMaxSize().background(Anthrazit).statusBarsPadding()) {
+        Column(
+            Modifier.fillMaxSize().padding(16.dp).background(Color.White, MaterialTheme.shapes.large).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((code, label) in listOf("de" to "Deutsch", "uk" to "Українська", "ru" to "Русский")) {
+                    FilterChip(selected = lang == code, onClick = { lang = code }, label = { Text(label) })
+                }
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(t.title, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+                for (line in t.items) Text("• $line", fontSize = 15.sp)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = checked, onCheckedChange = { checked = it })
+                Text(t.check, fontWeight = FontWeight.Bold)
+            }
+            Button(
+                enabled = checked,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    val at = System.currentTimeMillis()
+                    Prefs.setNotice(ctx, lang, at, false)
+                    onDone()
+                    scope.launch(Dispatchers.IO) { sendNotice(ctx) }
+                },
+            ) { Text(t.button) }
+        }
+    }
+}
+
+/** Schickt die Bestätigung des Hinweises zum Server. Klappt es nicht (kein Internet), versucht der Start es später noch einmal. */
+fun sendNotice(ctx: Context) {
+    if (!Prefs.noticeOk(ctx) || Prefs.noticeSent(ctx)) return
+    val token = Prefs.token(ctx) ?: return
+    runCatching {
+        Api.post(ctx, "/api/me/notice", JSONObject().put("version", Prefs.NOTICE_VERSION).put("lang", Prefs.noticeLang(ctx)).put("at", Prefs.noticeAt(ctx)), token)
+        Prefs.setNoticeSent(ctx)
+    }
 }
 
 @Composable
@@ -252,6 +313,7 @@ fun MainScreen() {
         Reminder.schedule(ctx) // Erinnerung zum Tagesbeginn
         EveningCheck.fire(ctx) // Abendfrage / automatisches Tagesende (auch nachholen, wenn das Handy aus war)
     }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { sendNotice(ctx) } }
     // Chef-Status beim Start vom Server holen (wer sich früher angemeldet hat, hat ihn vielleicht nicht gespeichert).
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {

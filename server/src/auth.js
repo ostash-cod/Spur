@@ -88,5 +88,7 @@ export function publicUser(row) {
     home_km: row.home_km > 0 ? row.home_km : null,
     active: !!row.active,
     gps_test: row.role === 'admin' && !!row.gps_test,
+    notice_version: row.notice_version ?? null,
+    notice_at: row.notice_at ?? null,
   };
 }
