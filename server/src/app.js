@@ -400,9 +400,31 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     if (next.site_id != null && !db.prepare('SELECT 1 FROM sites WHERE id = ?').get(Number(next.site_id))) return reply.code(400).send({ error: 'Baustelle nicht gefunden' });
     if (next.kind === 'work' && next.site_id == null) return reply.code(400).send({ error: 'Bitte eine Baustelle wählen' });
     if (next.kind !== 'work') next.site_id = null;
-    if (overlaps(seg.day_id, next.started_at, next.ended_at, seg.id)) return reply.code(409).send({ error: 'Die Zeit überschneidet sich mit einem anderen Abschnitt an diesem Tag' });
+    // Überschneidung mit Nachbarn: erst fragen (409 mit Liste), mit adjust_neighbors werden sie kürzer, verschoben oder ausgeblendet.
+    const clash = db.prepare('SELECT * FROM segments WHERE day_id = ? AND id != ? AND deleted_at IS NULL AND kind != ? AND started_at < ? AND COALESCE(ended_at, ?) > ? ORDER BY started_at')
+      .all(seg.day_id, seg.id, 'travel', next.ended_at, Number.MAX_SAFE_INTEGER, next.started_at);
+    const plan = clash.map((n) => {
+      const nEnd = n.ended_at ?? Number.MAX_SAFE_INTEGER;
+      if (n.started_at >= next.started_at && nEnd <= next.ended_at) return { id: n.id, action: 'remove', kind: n.kind, site_id: n.site_id, started_at: n.started_at, ended_at: n.ended_at };
+      if (n.started_at < next.started_at && nEnd > next.ended_at) return { id: n.id, action: 'split', kind: n.kind, site_id: n.site_id, started_at: n.started_at, ended_at: n.ended_at };
+      if (n.started_at < next.started_at) return { id: n.id, action: 'shorten', kind: n.kind, site_id: n.site_id, started_at: n.started_at, ended_at: n.ended_at, new_started_at: n.started_at, new_ended_at: next.started_at };
+      return { id: n.id, action: 'shorten', kind: n.kind, site_id: n.site_id, started_at: n.started_at, ended_at: n.ended_at, new_started_at: next.ended_at, new_ended_at: n.ended_at };
+    });
+    if (plan.some((p) => p.action === 'split')) return reply.code(409).send({ error: 'Die Zeit liegt mitten in einem anderen Abschnitt. Bitte diesen erst teilen oder kürzer machen.' });
+    if (plan.length && b.adjust_neighbors !== true) return reply.code(409).send({ error: 'Die Zeit überschneidet sich mit einem anderen Abschnitt an diesem Tag', neighbors: plan });
     db.exec('BEGIN');
     try {
+      const nowN = Date.now();
+      for (const p of plan) {
+        if (p.action === 'remove') {
+          logChange(db, { item: 'segment', itemId: p.id, field: 'deleted', oldValue: null, newValue: nowN, by: req.user.id });
+          db.prepare('UPDATE segments SET deleted_at = ?, chef_edited = 1, updated_at = ? WHERE id = ?').run(nowN, nowN, p.id);
+        } else {
+          if (p.new_started_at !== p.started_at) logChange(db, { item: 'segment', itemId: p.id, field: 'started_at', oldValue: p.started_at, newValue: p.new_started_at, by: req.user.id });
+          if (p.new_ended_at !== p.ended_at) logChange(db, { item: 'segment', itemId: p.id, field: 'ended_at', oldValue: p.ended_at, newValue: p.new_ended_at, by: req.user.id });
+          db.prepare('UPDATE segments SET started_at = ?, ended_at = ?, chef_edited = 1, updated_at = ? WHERE id = ?').run(p.new_started_at, p.new_ended_at, nowN, p.id);
+        }
+      }
       for (const f of ['started_at', 'ended_at', 'site_id', 'kind', 'billing']) {
         logChange(db, { item: 'segment', itemId: seg.id, field: f, oldValue: seg[f], newValue: next[f], by: req.user.id });
       }

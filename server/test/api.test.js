@@ -449,3 +449,37 @@ test('Schritt 3: Chef ändert, teilt und löscht Abschnitte; Originale bleiben, 
   const notes = (await app2.inject({ url: `/api/notes?from=2026-11-10&to=2026-11-10&user_id=${w.id}`, headers: auth(at) })).json();
   assert.equal(notes[0].text, 'Von Chef');
 });
+
+test('Chef ändert Zeit: Nachbarn werden nach Rückfrage kürzer, verschoben oder ausgeblendet', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Serhii' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+  const auth = (t) => ({ authorization: `Bearer ${t}` });
+  const H = 3_600_000, t0 = Date.UTC(2026, 10, 10, 6, 0, 0);
+  const site = Number(db2.prepare("INSERT INTO sites (name, color) VALUES ('A', '#2E9E4F')").run().lastInsertRowid);
+  const day = (await app2.inject({ method: 'POST', url: '/api/days', headers: auth(wt), payload: { client_id: 'tag-nb-12345678', started_at: t0, ended_at: t0 + 10 * H } })).json();
+  const mk = (n, a1, b1) => ({ client_id: `seg-${n}-12345678`, site_id: site, kind: 'work', started_at: t0 + a1 * H, ended_at: t0 + b1 * H });
+  await app2.inject({ method: 'POST', url: `/api/days/${day.id}/segments`, headers: auth(wt), payload: { segments: [mk('a', 0, 3), mk('b', 3, 5), mk('c', 5, 8)] } });
+  const list = async () => (await app2.inject({ url: `/api/days?user_id=${w.id}&from=${t0 - H}&to=${t0 + 24 * H}`, headers: auth(at) })).json()[0].segments;
+  const [sa, sb, sc] = await list();
+  const patch = (id, payload) => app2.inject({ method: 'PATCH', url: `/api/segments/${id}`, headers: auth(at), payload });
+  // a bis 4 verlängern: ohne Zustimmung 409 mit Liste, nichts geändert
+  const ask = await patch(sa.id, { ended_at: t0 + 4 * H });
+  assert.equal(ask.statusCode, 409);
+  assert.equal(ask.json().neighbors[0].action, 'shorten');
+  assert.equal((await list())[1].started_at, t0 + 3 * H);
+  // mit Zustimmung: b beginnt erst um 4
+  assert.equal((await patch(sa.id, { ended_at: t0 + 4 * H, adjust_neighbors: true })).statusCode, 200);
+  let l = await list();
+  assert.equal(l[1].started_at, t0 + 4 * H);
+  // a bis 6: b ist ganz überdeckt (ausgeblendet), c beginnt um 6
+  assert.equal((await patch(sa.id, { ended_at: t0 + 6 * H, adjust_neighbors: true })).statusCode, 200);
+  l = await list();
+  assert.equal(l.length, 2);
+  assert.equal(l[1].started_at, t0 + 6 * H);
+  // Der Abschnitt selbst darf kürzer werden
+  assert.equal((await patch(sc.id, { started_at: t0 + 6.5 * H, ended_at: t0 + 7 * H, adjust_neighbors: true })).statusCode, 200);
+});
