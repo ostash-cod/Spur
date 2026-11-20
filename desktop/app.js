@@ -1742,6 +1742,12 @@ async function tagesansicht(main, userId, dateStr) {
           'div',
           { class: 'card' },
           h('h2', {}, `${fmtTime(d.started_at)} bis ${d.ended_at ? fmtTime(d.ended_at) : 'läuft noch'} · ${fmtDuration(end - d.started_at)}`),
+          d.has_original
+            ? h('button', { class: 'linklike', style: 'margin:-6px 0 10px', onclick: async () => {
+                if (!confirm('Diesen Tag zurücksetzen auf das Original (Abschnitte und Zettel, wie vor deiner ersten Änderung)?')) return;
+                try { await api(`/days/${d.id}/restore-original`, { method: 'POST' }); route(); } catch (err) { alert(err.message); }
+              } }, '↩ Original wiederherstellen')
+            : null,
           timelineView(d, siteById, (trip) => tripDialog(d, trip, sites), (seg) => visitDialog(seg), (b) => dayBlockDialog(b)),
           h('details', { style: 'margin:10px 0' }, h('summary', {}, 'Abschnitte als Liste'), segmentList(d, siteById)),
           // Variante C: Der Weg liegt nur im Testmodus (oder bei alten Tagen) auf dem Server.

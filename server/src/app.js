@@ -10,6 +10,7 @@ import { registerSheetRoutes } from './sheets.js';
 import { registerWeekSheetRoutes } from './weeksheets.js';
 import { registerReceiptRoutes } from './receipts.js';
 import { registerPayrollRoutes } from './payroll.js';
+import { snapshotDay, syncSheet, restoreDay, hasOriginal } from './daysync.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { getSettings, setSetting, DEFAULT_SETTINGS, ensureSystemSites, mayUploadPoints, logChange } from './db.js';
@@ -398,6 +399,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     };
     if (next.billing !== null && !['bill', 'free', 'hide'].includes(next.billing)) return reply.code(400).send({ error: 'Abrechnung ungültig' });
     const onlyBilling = ['started_at', 'ended_at', 'site_id', 'kind'].every((f) => b[f] === undefined);
+    snapshotDay(db, seg.day_id);
     if (onlyBilling) {
       logChange(db, { item: 'segment', itemId: seg.id, field: 'billing', oldValue: seg.billing, newValue: next.billing, by: req.user.id });
       db.prepare('UPDATE segments SET billing = ? WHERE id = ?').run(next.billing, seg.id);
@@ -441,6 +443,12 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
       db.prepare('UPDATE segments SET started_at = ?, ended_at = ?, site_id = ?, kind = ?, billing = ?, chef_edited = 1, updated_at = ? WHERE id = ?')
         .run(next.started_at, next.ended_at, next.site_id, next.kind, next.billing, Date.now(), seg.id);
       widenDay(seg.day_id, next.started_at, next.ended_at, req.user.id);
+      // Der abgegebene Zettel bleibt die Grundlage für den Lohn: er zieht mit.
+      const st = (o) => ({ from: o.started_at, to: o.ended_at, site_id: o.site_id, kind: o.kind });
+      syncSheet(db, seg.day_id, [
+        { before: st(seg), after: st(next) },
+        ...plan.map((p) => ({ before: st(p), after: p.action === 'remove' ? null : { ...st(p), from: p.new_started_at, to: p.new_ended_at } })),
+      ]);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
@@ -457,6 +465,7 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     if (seg.ended_at == null) return reply.code(400).send({ error: 'Ein laufender Abschnitt kann nicht geteilt werden' });
     if (!validTs(at) || at < seg.started_at + 60000 || at > seg.ended_at - 60000) return reply.code(400).send({ error: 'Die Teilung muss mindestens 1 Minute nach dem Beginn und vor dem Ende liegen' });
     const now = Date.now();
+    snapshotDay(db, seg.day_id);
     db.exec('BEGIN');
     try {
       logChange(db, { item: 'segment', itemId: seg.id, field: 'ended_at', oldValue: seg.ended_at, newValue: at, by: req.user.id });
@@ -466,6 +475,8 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
          VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, ?, 1, ?, ?)`,
       ).run(seg.day_id, `chef-split-${seg.id}-${at}`, seg.site_id, seg.kind, at, seg.ended_at, seg.activity, seg.billing, now, now);
       logChange(db, { item: 'segment', itemId: Number(info.lastInsertRowid), field: 'split_from', oldValue: null, newValue: seg.id, by: req.user.id });
+      const stS = (f, t) => ({ from: f, to: t, site_id: seg.site_id, kind: seg.kind });
+      syncSheet(db, seg.day_id, [{ before: stS(seg.started_at, seg.ended_at), after: [stS(seg.started_at, at), stS(at, seg.ended_at)] }]);
       db.exec('COMMIT');
       return { ok: true, id: Number(info.lastInsertRowid) };
     } catch (err) {
@@ -479,10 +490,12 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     const seg = segById(Number(req.params.id));
     if (!seg) return reply.code(404).send({ error: 'Abschnitt nicht gefunden' });
     const now = Date.now();
+    snapshotDay(db, seg.day_id);
     db.exec('BEGIN');
     try {
       logChange(db, { item: 'segment', itemId: seg.id, field: 'deleted', oldValue: null, newValue: now, by: req.user.id });
       db.prepare('UPDATE segments SET deleted_at = ?, chef_edited = 1, updated_at = ? WHERE id = ?').run(now, now, seg.id);
+      syncSheet(db, seg.day_id, [{ before: { from: seg.started_at, to: seg.ended_at, site_id: seg.site_id, kind: seg.kind }, after: null }]);
       // Am Rand des Tages wird der Tag kürzer, damit die gelöschte Zeit nicht als Fahrt zählt.
       // In der Mitte bleibt die Lücke (sie zählt dann als Fahrt zwischen zwei Orten).
       const d = db.prepare('SELECT * FROM days WHERE id = ?').get(seg.day_id);
@@ -525,7 +538,22 @@ export async function buildApp({ db, staticDir, logger = false, fetchImpl, apkDi
     const pointStmt = db.prepare('SELECT ts, lat, lng, acc FROM points WHERE day_id = ? ORDER BY ts');
     const segStmt = db.prepare('SELECT id, client_id, site_id, kind, started_at, ended_at, source, activity, billing, chef_edited, created_at, updated_at FROM segments WHERE day_id = ? AND deleted_at IS NULL ORDER BY started_at');
     const markStmt = db.prepare('SELECT started_at, mode, site_id FROM trip_marks WHERE day_id = ? ORDER BY started_at');
-    return days.map((d) => ({ ...d, points: pointStmt.all(d.id), segments: segStmt.all(d.id), trip_marks: markStmt.all(d.id) }));
+    return days.map((d) => ({ ...d, has_original: hasOriginal(db, d.id), points: pointStmt.all(d.id), segments: segStmt.all(d.id), trip_marks: markStmt.all(d.id) }));
+  });
+
+  // Chef: Tag auf den Originalzustand zurücksetzen (Abschnitte, Tagesgrenzen, Zettel), so wie er vor der ersten Änderung war.
+  app.post('/api/days/:id/restore-original', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id);
+    db.exec('BEGIN');
+    try {
+      const r = restoreDay(db, id);
+      if (r.error) { db.exec('ROLLBACK'); return reply.code(r.code).send({ error: r.error }); }
+      db.exec('COMMIT');
+      return { ok: true };
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
   });
 
   // Eine Fahrt am Desktop ändern: Streifen (Materialfahrt) wegnehmen oder einer anderen Baustelle zuordnen.

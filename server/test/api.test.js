@@ -501,3 +501,53 @@ test('Datenschutzhinweis: Bestätigung in der App wird gespeichert und dem Chef 
   assert.equal(m.notice_version, 'test-1');
   assert.ok(m.notice_at > 0);
 });
+
+test('Zettel zieht mit: Änderung am Abschnitt ändert den abgegebenen Zettel, Original lässt sich wiederherstellen', async () => {
+  const db2 = openDb(':memory:');
+  const a = createUser(db2, { name: 'Chef', role: 'admin' });
+  const w = createUser(db2, { name: 'Serhii' });
+  const app2 = await buildApp({ db: db2 });
+  const tok = async (c) => (await app2.inject({ method: 'POST', url: '/api/login', payload: { code: c } })).json().token;
+  const at = await tok(a.code), wt = await tok(w.code);
+  const auth = (t) => ({ authorization: `Bearer ${t}` });
+  const H = 3_600_000, t0 = Date.UTC(2026, 10, 10, 6, 0, 0); // 07:00 Ortszeit am 10.11.2026
+  const s1 = Number(db2.prepare("INSERT INTO sites (name, color) VALUES ('A', '#2E9E4F')").run().lastInsertRowid);
+  const s2 = Number(db2.prepare("INSERT INTO sites (name, color) VALUES ('B', '#2E9E4F')").run().lastInsertRowid);
+  const day = (await app2.inject({ method: 'POST', url: '/api/days', headers: auth(wt), payload: { client_id: 'tag-zs-12345678', started_at: t0, ended_at: t0 + 6 * H } })).json();
+  const mk = (n, site, a1, b1) => ({ client_id: `seg-${n}-12345678`, site_id: site, kind: 'work', started_at: t0 + a1 * H, ended_at: t0 + b1 * H });
+  await app2.inject({ method: 'POST', url: `/api/days/${day.id}/segments`, headers: auth(wt), payload: { segments: [mk('a', s1, 0, 3), mk('b', s2, 4, 6)] } });
+  const sheetBody = { date: '2026-11-10', start: t0, end: t0 + 6 * H, pause_min: 30, lines: [
+    { kind: 'work', site_id: s1, from: t0, to: t0 + 3 * H },
+    { kind: 'travel', site_id: null, from: t0 + 3 * H, to: t0 + 4 * H, km: 12, vehicle: 'privat' },
+    { kind: 'work', site_id: s2, from: t0 + 4 * H, to: t0 + 6 * H },
+  ] };
+  assert.equal((await app2.inject({ method: 'POST', url: '/api/sheets', headers: auth(wt), payload: sheetBody })).statusCode, 200);
+  const getDay = async () => (await app2.inject({ url: `/api/days?user_id=${w.id}&from=${t0 - H}&to=${t0 + 24 * H}`, headers: auth(at) })).json()[0];
+  const getSheet = async () => (await app2.inject({ url: '/api/sheets?from=2026-11-10&to=2026-11-10', headers: auth(at) })).json()[0];
+  let d = await getDay();
+  assert.equal(d.has_original, false);
+  const [sa, sb] = d.segments;
+  // a endet eine halbe Stunde später: Zettel-Zeile und Fahrt ziehen mit, Pause und Kilometer bleiben
+  assert.equal((await app2.inject({ method: 'PATCH', url: `/api/segments/${sa.id}`, headers: auth(at), payload: { ended_at: t0 + 3.5 * H } })).statusCode, 200);
+  let sh = await getSheet();
+  assert.equal(sh.lines[0].to, t0 + 3.5 * H);
+  assert.equal(sh.lines[1].from, t0 + 3.5 * H);
+  assert.equal(sh.lines[1].to, t0 + 4 * H);
+  assert.equal(sh.lines[1].km, 12);
+  assert.equal(sh.pause_min, 30);
+  assert.equal((await getDay()).has_original, true);
+  // b löschen: Zeile verschwindet
+  assert.equal((await app2.inject({ method: 'DELETE', url: `/api/segments/${sb.id}`, headers: auth(at) })).statusCode, 200);
+  sh = await getSheet();
+  assert.equal(sh.lines.filter((l) => l.kind === 'work').length, 1);
+  // Original wiederherstellen: Abschnitte und Zettel wie vorher
+  assert.equal((await app2.inject({ method: 'POST', url: `/api/days/${d.id}/restore-original`, headers: auth(at) })).statusCode, 200);
+  d = await getDay();
+  assert.equal(d.has_original, false);
+  assert.equal(d.segments.length, 2);
+  assert.equal(d.segments[0].ended_at, t0 + 3 * H);
+  sh = await getSheet();
+  assert.deepEqual(sh.lines.map((l) => [l.kind, l.from, l.to]), [['work', t0, t0 + 3 * H], ['travel', t0 + 3 * H, t0 + 4 * H], ['work', t0 + 4 * H, t0 + 6 * H]]);
+  // Ohne Änderung gibt es nichts wiederherzustellen
+  assert.equal((await app2.inject({ method: 'POST', url: `/api/days/${d.id}/restore-original`, headers: auth(at) })).statusCode, 404);
+});

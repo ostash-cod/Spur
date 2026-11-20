@@ -1,4 +1,6 @@
 import { touchWeek } from './weeksheets.js';
+import { snapshotDay } from './daysync.js';
+import { dateKey } from './report.js';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const KINDS = new Set(['work', 'travel', 'break', 'private']);
 const VEHICLES = new Set(['privat', 'firma']);
@@ -49,6 +51,10 @@ export function registerSheetRoutes(app, { db, requireUser, requireAdmin }) {
     const v = validate({ ...(req.body ?? {}), date: row.date });
     if (v.error) return reply.code(400).send({ error: v.error });
     if (!touchWeek(db, row.user_id, row.date)) return reply.code(409).send({ error: 'Diese Woche ist bestätigt und gesperrt' });
+    // Original still merken (Weg zurück am Tag), dann ändern.
+    const around = db.prepare('SELECT id, started_at FROM days WHERE user_id = ? AND started_at >= ? AND started_at < ?')
+      .all(row.user_id, Date.parse(`${row.date}T00:00:00Z`) - 86400000, Date.parse(`${row.date}T00:00:00Z`) + 2 * 86400000);
+    for (const d of around) if (dateKey(d.started_at) === row.date) snapshotDay(db, d.id);
     db.prepare('UPDATE sheets SET data = ? WHERE id = ?').run(v.data, row.id);
     return { ok: true };
   });

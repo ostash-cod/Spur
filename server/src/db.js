@@ -178,6 +178,11 @@ CREATE TABLE IF NOT EXISTS change_log (
   changed_by INTEGER REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS change_log_item ON change_log (item, item_id);
+CREATE TABLE IF NOT EXISTS day_originals (
+  day_id INTEGER PRIMARY KEY REFERENCES days(id),
+  snapshot TEXT NOT NULL,
+  saved_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS points (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   day_id INTEGER NOT NULL REFERENCES days(id),
