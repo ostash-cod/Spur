@@ -142,8 +142,12 @@ fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, k
     val db = remember { Db.get(ctx) }
     val choices = remember(date) { noteSiteChoices(db, date, sites, startSiteId) }
     var siteId by remember { mutableStateOf(startSiteId ?: choices.firstOrNull()?.id) }
-    val saved = remember(date, siteId) { db.notesForDate(date.toString()).firstOrNull { it.siteId == siteId && it.kind == kind }?.text ?: "" }
-    var text by remember(date, siteId) { mutableStateOf(saved) }
+    val savedNotes = remember(date) { db.notesForDate(date.toString()).filter { it.kind == kind && it.text.isNotBlank() } }
+    val savedOf = { id: Long? -> savedNotes.firstOrNull { it.siteId == id }?.text ?: "" }
+    // Der Text bleibt beim Wechsel der Baustelle stehen: Wer merkt, dass er die falsche gewählt hat, tippt einfach die richtige an.
+    val origin = remember(date) { if (savedOf(siteId).isNotBlank()) siteId else null }
+    var text by remember(date) { mutableStateOf(savedOf(siteId)) }
+    val targetHasNote = siteId != origin && savedOf(siteId).isNotBlank()
     val dayName = when (date) {
         LocalDate.now() -> "heute"
         LocalDate.now().minusDays(1) -> "gestern"
@@ -155,13 +159,27 @@ fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, k
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (choices.size > 1) {
-                    Text("Baustelle", fontWeight = FontWeight.Bold)
+                    Text("Baustelle wählen", fontWeight = FontWeight.Bold)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (s in choices) FilterChip(selected = siteId == s.id, onClick = { siteId = s.id }, label = { Text(s.name) })
+                        for (c in choices) {
+                            val on = siteId == c.id
+                            FilterChip(
+                                selected = on,
+                                onClick = { siteId = c.id },
+                                label = { Text((if (on) "✓ " else "") + c.name + (if (savedOf(c.id).isNotBlank()) "  (hat Notiz)" else ""), fontWeight = if (on) FontWeight.Bold else FontWeight.Normal) },
+                                colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
+                                    containerColor = androidx.compose.ui.graphics.Color.White,
+                                    labelColor = androidx.compose.ui.graphics.Color(0xFF5F6368),
+                                    selectedContainerColor = androidx.compose.ui.graphics.Color(0xFF1B1C1E),
+                                    selectedLabelColor = androidx.compose.ui.graphics.Color.White,
+                                ),
+                            )
+                        }
                     }
-                } else if (choices.size == 1) {
-                    Text(choices[0].name, fontWeight = FontWeight.Bold)
                 }
+                val currentName = choices.firstOrNull { it.id == siteId }?.name
+                if (currentName != null) Text("Notiz für: $currentName", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
+                if (targetHasNote) Text("Diese Baustelle hat schon eine Notiz. Dein Text wird unten angefügt.", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color(0xFF8A5A00))
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -173,7 +191,10 @@ fun NoteDialog(date: LocalDate, startSiteId: Long?, sites: Map<Long, SiteRow>, k
         },
         confirmButton = {
             Button(onClick = {
-                db.saveNote(date.toString(), siteId, text, kind)
+                val finalText = if (targetHasNote) savedOf(siteId).trimEnd() + (if (text.isNotBlank()) "\n" + text.trim() else "") else text
+                db.saveNote(date.toString(), siteId, finalText, kind)
+                // Text zu einer anderen Baustelle verschoben: bei der alten verschwindet er.
+                if (origin != null && origin != siteId) db.saveNote(date.toString(), origin, "", kind)
                 SyncWorker.enqueue(ctx)
                 onDismiss()
             }) { Text("Speichern") }
