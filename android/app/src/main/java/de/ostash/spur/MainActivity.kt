@@ -1198,6 +1198,21 @@ fun SetPositionDialog(site: SiteRow, onDismiss: () -> Unit, onDone: () -> Unit) 
     )
 }
 
+/** Auswahlknopf: Der gewählte ist dunkel mit weißer Schrift und ✓, die anderen sind weiß mit grauer Schrift. Eindeutig, auch bei schnellem Tippen. */
+@Composable
+fun ChoiceButton(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    // Hinweis: OutlinedButton ist in dieser App gelb gefüllt (Buttons.kt), deshalb hier ein eigener Knopf mit klarem Unterschied.
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(52.dp),
+        colors = if (selected) ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)
+        else ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF5F6368)),
+        border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFB0B4B9)),
+    ) {
+        Text(if (selected) "✓ $label" else label, fontSize = 17.sp, fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Normal)
+    }
+}
+
 /** Legt einen Ort an der aktuellen Position an. Händler darf jeder anlegen, Baustellen nur der Chef. */
 @Composable
 fun SavePlaceDialog(
@@ -1223,8 +1238,8 @@ fun SavePlaceDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (isAdmin) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (kind == "haendler") Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("Händler") } else OutlinedButton(onClick = { kind = "haendler" }, modifier = Modifier.weight(1f)) { Text("Händler") }
-                        if (kind == "baustelle") Button(onClick = {}, modifier = Modifier.weight(1f)) { Text("Baustelle") } else OutlinedButton(onClick = { kind = "baustelle" }, modifier = Modifier.weight(1f)) { Text("Baustelle") }
+                        ChoiceButton("Händler", kind == "haendler", { kind = "haendler" }, Modifier.weight(1f))
+                        ChoiceButton("Baustelle", kind == "baustelle", { kind = "baustelle" }, Modifier.weight(1f))
                     }
                 }
                 OutlinedTextField(
