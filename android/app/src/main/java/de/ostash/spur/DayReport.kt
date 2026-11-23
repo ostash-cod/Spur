@@ -238,7 +238,7 @@ fun queueSheetJson(db: Db, day: DayRow, startRaw: Long, endRaw: Long, pauseRaw: 
         }
         arr.put(o)
     }
-    val json = JSONObject().put("date", date).put("start", start).put("end", end).put("pause_min", pauseMin).put("lines", arr).toString()
+    val json = JSONObject().put("date", date).put("start", start).put("end", end).put("pause_min", pauseMin).put("day_end", roundTo5(day.endedAt ?: endRaw)).put("lines", arr).toString()
     db.queueSheet(date, json)
     // Mit dem Abgeben werden die rohen GPS-Punkte dieses Tages gelöscht (nur wenn der Tag beendet ist).
     if (day.endedAt != null) runCatching { db.purgeDayPoints(day.id, onlySynced = false) }
@@ -250,7 +250,15 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
     val ctx = LocalContext.current
     val db = remember { Db.get(ctx) }
     val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString()
-    val savedJson = remember(day.id) { db.unsentOrSentSheetJson(date) }
+    // Ist der Tag nach der letzten Abgabe länger geworden (zweite Schicht, späteres Ende), wird der Zettel neu aus dem Tag gebaut.
+    val savedJson = remember(day.id) {
+        db.unsentOrSentSheetJson(date)?.takeIf { js ->
+            val o = org.json.JSONObject(js)
+            val savedEnd = if (o.has("day_end")) o.getLong("day_end") else o.optLong("end", 0L)
+            val dayEnd = day.endedAt?.let { roundTo5(it) } ?: 0L
+            !(dayEnd > savedEnd)
+        }
+    }
     val lines = remember(day.id) {
         mutableStateListOf<SheetLine>().also {
             it.addAll(if (savedJson != null) savedSheetLines(savedJson, siteMap) else sheetLines(db, day, now, siteMap, commuteKm(ctx), Prefs.usesPrivateCar(ctx)))
@@ -344,9 +352,6 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
         },
         dismissButton = {
             Row {
-                if (savedJson != null) TextButton(onClick = {
-                    lines.clear(); lines.addAll(sheetLines(db, day, now, siteMap, commuteKm(ctx), Prefs.usesPrivateCar(ctx))); tick.value++
-                }) { Text("Neu aus dem Tag") }
                 TextButton(onClick = onDismiss) { Text("Später") }
             }
         },
