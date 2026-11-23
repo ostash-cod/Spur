@@ -231,6 +231,18 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "spur.db", nu
     @Synchronized
     fun startDayIfNone(now: Long): DayRow {
         openDay()?.let { return it }
+        // Zweite Schicht am selben Tag: den Tag wieder öffnen, die Lücke dazwischen wird eine Unterbrechung.
+        val zone = java.time.ZoneId.systemDefault()
+        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val from = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val last = daysOnDate(from, from + 86_400_000L).lastOrNull()
+        if (last != null && last.endedAt != null && now > last.endedAt!! && !isDayLocked(this, today)) {
+            val oldEnd = last.endedAt!!
+            val cv = ContentValues().apply { putNull("ended_at"); put("dirty", 1) }
+            writableDatabase.update("days", cv, "id = ?", arrayOf(last.id.toString()))
+            insertSegment(last.id, null, "break", oldEnd, now, "auto")
+            return openDay()!!
+        }
         val cv = ContentValues().apply {
             put("client_id", UUID.randomUUID().toString())
             put("started_at", now)

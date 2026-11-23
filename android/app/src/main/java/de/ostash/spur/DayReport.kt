@@ -1,5 +1,6 @@
 package de.ostash.spur
 
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.ui.Alignment
@@ -278,8 +279,8 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFFF1F3F5)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(l.label, fontWeight = FontWeight.Bold)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.from) { t -> lines.setBoundary(ctx, i, false, t); tick.value++ } }) { Text("von ${hmOf(l.from)}") }
-                            androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.to) { t -> lines.setBoundary(ctx, i, true, t); tick.value++ } }) { Text("bis ${hmOf(l.to)}") }
+                            androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.from) { t -> lines.setBoundary(ctx, i, false, t); tick.value++ } }, colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1B1C1E)), border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF1B1C1E))) { Text("von ${hmOf(l.from)}", fontWeight = FontWeight.Bold) }
+                            androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.to) { t -> lines.setBoundary(ctx, i, true, t); tick.value++ } }, colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1B1C1E)), border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF1B1C1E))) { Text("bis ${hmOf(l.to)}", fontWeight = FontWeight.Bold) }
                         }
                         if (l.kind == "travel" && privateCar && afterFirma(i)) {
                             Text("Womit bist du hier gefahren?", fontSize = 14.sp)
@@ -354,18 +355,36 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
 
 /** Knopf „Zettel“ für einen Tag: öffnet den Zettel zum Prüfen und Abgeben. */
 @Composable
-fun SheetButton(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>) {
+fun SheetButton(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onEndDay: (() -> Unit)? = null) {
     var open by remember { mutableStateOf(false) }
+    var needEnd by remember { mutableStateOf(false) }
+    var version by remember { mutableIntStateOf(0) }
     val ctx = LocalContext.current
     val date = Instant.ofEpochMilli(day.startedAt).atZone(ZoneId.systemDefault()).toLocalDate()
     if (isDayLocked(Db.get(ctx), date)) {
         Text("Dieser Tag ist abgeschlossen. Änderungen macht nur der Chef.", color = Color(0xFF6A6F75), fontSize = 13.sp)
         return
     }
-    androidx.compose.material3.OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF1B1C1E)), border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF1B1C1E))) {
-        Text("📋 Zettel für diesen Tag prüfen und abgeben", fontWeight = FontWeight.Bold)
+    val sent = key(version, open) { Db.get(ctx).sheetState(date.toString()) != null }
+    if (sent) {
+        androidx.compose.material3.OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4A4F55)), border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF9AA0A6))) {
+            Text("✅ Zettel abgegeben – korrigieren", fontWeight = FontWeight.Bold)
+        }
+    } else {
+        Button(onClick = { if (day.endedAt == null && onEndDay != null) needEnd = true else open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF5C400), contentColor = Color(0xFF1B1C1E))) {
+            Text("📋 Zettel abgeben", fontWeight = FontWeight.ExtraBold)
+        }
     }
-    if (open) SheetDialog(day, now, siteMap, onDismiss = { open = false })
+    if (needEnd) {
+        AlertDialog(
+            onDismissRequest = { needEnd = false },
+            title = { Text("Erst Tag beenden") },
+            text = { Text("Dein Tag läuft noch. Beende ihn zuerst, danach kannst du den Zettel abgeben.") },
+            confirmButton = { TextButton(onClick = { needEnd = false; onEndDay?.invoke() }) { Text("Tag beenden", fontWeight = FontWeight.Bold) } },
+            dismissButton = { TextButton(onClick = { needEnd = false }) { Text("Abbrechen") } },
+        )
+    }
+    if (open) SheetDialog(day, now, siteMap, onDismiss = { open = false; version++ })
 }
 
 /** Knopf „Woche abgeben“: schickt die Zettel von Montag bis heute ab und sperrt die Woche für Änderungen. */
@@ -410,5 +429,23 @@ fun WeekSubmitButton(now: Long, siteMap: Map<Long, SiteRow>) {
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Abbrechen") } },
         )
+    }
+}
+
+/** Ab Freitag: Tage dieser Woche, die gearbeitet wurden, aber noch keinen abgegebenen Zettel haben. */
+@Composable
+fun UnsubmittedWarning(db: Db) {
+    val today = java.time.LocalDate.now()
+    if (today.dayOfWeek.value < 5) return
+    val zone = ZoneId.systemDefault()
+    val missing = (0 until today.dayOfWeek.value - 1).map { today.minusDays((it + 1).toLong()) }.filter { d ->
+        val from = d.atStartOfDay(zone).toInstant().toEpochMilli()
+        db.daysOnDate(from, from + 86_400_000L).isNotEmpty() && db.sheetState(d.toString()) == null && !isDayLocked(db, d)
+    }.reversed()
+    if (missing.isEmpty()) return
+    val names = missing.joinToString(", ") { it.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.GERMANY) }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFE3E0)).padding(12.dp)) {
+        Text("Noch nicht abgegeben: $names", fontWeight = FontWeight.Bold, color = Color(0xFFB3261E))
+        Text("Wische nach links zu dem Tag und tippe „Zettel abgeben“.", fontSize = 13.sp)
     }
 }

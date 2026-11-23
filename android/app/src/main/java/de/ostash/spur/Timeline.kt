@@ -73,7 +73,7 @@ fun buildTimeline(
         val start = maxOf(s.startedAt, cursor)
         val site = s.siteId?.let { sites[it] }
         val label = when {
-            s.kind == "break" -> "Pause"
+            s.kind == "break" -> if (sEnd - s.startedAt > 60 * 60_000L) "Unterbrechung" else "Pause"
             s.kind == "private" -> "Privat"
             else -> site?.name ?: "Ohne Baustelle"
         }

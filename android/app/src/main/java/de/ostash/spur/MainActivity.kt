@@ -782,7 +782,8 @@ fun TodayScreen(
             val z = ZoneId.systemDefault()
             val d0 = LocalDate.now().atStartOfDay(z).toInstant().toEpochMilli()
             val today = Db.get(ctx).daysOnDate(d0, d0 + 86_400_000L).lastOrNull()
-            if (today != null) SheetButton(today, now, sites.associateBy { it.id })
+            UnsubmittedWarning(Db.get(ctx))
+            if (today != null) SheetButton(today, now, sites.associateBy { it.id }, onEndDay = onToggle)
         }
         NotesList(LocalDate.now(), sites.associateBy { it.id }, notesVersion) { n -> noteDialog = Triple(LocalDate.now(), n.siteId, n.kind) }
         noteDialog?.let { (d, sid, kd) ->
