@@ -411,6 +411,10 @@ fun MainScreen() {
         }
     }
 
+    var vehicleTick by remember { mutableIntStateOf(0) }
+    val vehicleAsks = remember(timeline, day?.id, vehicleTick, now / 30_000) {
+        if (day != null && Prefs.usesPrivateCar(ctx)) firmaDepartures(timeline, siteMap).filter { db.tripMark(day.id, it.start) == null } else emptyList()
+    }
     val dateText = selectedDate.format(DateTimeFormatter.ofPattern("EEEE, d. MMMM", Locale.GERMANY))
     val subtitle = when {
         tab != 0 || page == DAYS_BACK ->
@@ -502,6 +506,11 @@ fun MainScreen() {
                     onStopAtSite = { st, site -> answerAtSite(st, site) },
                     onStopVisit = { visitStop = it },
                     onStopChange = { changeStop = it },
+                    vehicleAsks = vehicleAsks,
+                    onVehicle = { b, v ->
+                        day?.let { db.saveTripMark(it.id, b.start, v, null) }
+                        vehicleTick++
+                    },
                   )
                 }
                 1 -> ReportsScreen(now, sites.associateBy { it.id })
@@ -731,6 +740,8 @@ fun TodayScreen(
     onStopAtSite: (StopRow, SiteRow) -> Unit,
     onStopVisit: (StopRow) -> Unit,
     onStopChange: (StopRow) -> Unit,
+    vehicleAsks: List<TimelineBlock> = emptyList(),
+    onVehicle: (TimelineBlock, String) -> Unit = { _, _ -> },
 ) {
     val ctx = LocalContext.current
     val lastSync = Prefs.lastSync(ctx)
@@ -797,6 +808,8 @@ fun TodayScreen(
             fontSize = 14.sp,
         )
 
+        for (b in vehicleAsks) VehicleCard(b, onVehicle)
+
         for (stop in stops) {
             val nearby = nearSites(sites, stop)
             StopCard(stop, nearby, onStopPause, onStopName, onStopContinue, onStopAtSite, onStopVisit)
@@ -825,48 +838,65 @@ fun TodayScreen(
             }
         }
 
-        Text("Baustellen", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
-        if (sites.size > 8) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text("Suchen") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                trailingIcon = if (query.isNotEmpty()) ({ TextButton(onClick = { query = ""; focusManager.clearFocus() }) { Text("X", fontWeight = FontWeight.Bold) } }) else null,
-            )
+        // Mit GPS-Hilfe erkennt die App die Baustelle selbst: Kacheln und Suche sind dann eingeklappt. Der laufende Ort bleibt immer sichtbar.
+        val gpsOn = Prefs.gpsHelp(ctx)
+        var showManual by remember { mutableStateOf(false) }
+        var showMore by remember { mutableStateOf(false) }
+        val manualOpen = !gpsOn || showManual || q.isNotEmpty()
+        val runningTile = shown.firstOrNull { it.id == runningId }
+        if (gpsOn && !manualOpen && runningTile != null) {
+            Text("Jetzt", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            SiteTile(runningTile, runningSegment, now, onLongClick = if (isAdmin) ({ onSiteLongPress(runningTile) }) else null) { onSiteTap(runningTile) }
         }
-        if (sites.isEmpty()) {
-            Text(
-                "Noch keine Baustellen. Lege sie am Desktop unter „Kunden und Projekte“ an. Sie erscheinen hier nach dem nächsten Abgleich.",
-                color = Color(0xFF6A6F75),
-            )
-        }
-        if (q.isNotEmpty() && shown.isEmpty()) Text("Nichts gefunden.", color = Color(0xFF6A6F75))
-        for (site in baustellen) {
-            SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
-        }
-        if (others.isNotEmpty()) {
-            val open = showOthers || q.isNotEmpty()
-            OutlinedButton(onClick = { showOthers = !showOthers }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                Text(if (open) "Lager, Firma und Händler ausblenden ▲" else "Lager, Firma und Händler anzeigen (${others.size}) ▼")
+        if (gpsOn) {
+            OutlinedButton(onClick = { showManual = !showManual }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text(if (manualOpen) "Baustelle von Hand wählen ausblenden ▲" else "Baustelle von Hand wählen ▼")
             }
-            if (open) {
+        }
+        if (manualOpen) {
+            Text("Baustellen", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            if (sites.size > 8) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Suchen") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    trailingIcon = if (query.isNotEmpty()) ({ TextButton(onClick = { query = ""; focusManager.clearFocus() }) { Text("X", fontWeight = FontWeight.Bold) } }) else null,
+                )
+            }
+            if (sites.isEmpty()) {
+                Text(
+                    "Noch keine Baustellen. Lege sie am Desktop unter „Kunden und Projekte“ an. Sie erscheinen hier nach dem nächsten Abgleich.",
+                    color = Color(0xFF6A6F75),
+                )
+            }
+            if (q.isNotEmpty() && shown.isEmpty()) Text("Nichts gefunden.", color = Color(0xFF6A6F75))
+            for (site in baustellen) {
+                SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
+            }
+        }
+        OutlinedButton(onClick = { showMore = !showMore }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            Text(if (showMore) "Mehr ausblenden ▲" else "Mehr ▼")
+        }
+        if (showMore || q.isNotEmpty()) {
+            if (others.isNotEmpty()) {
+                Text("Lager, Firma und Händler", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 for (site in others) {
                     SiteTile(site, runningSegment?.takeIf { it.siteId == site.id }, now, onLongClick = if (isAdmin) ({ onSiteLongPress(site) }) else null) { onSiteTap(site) }
                 }
             }
-        }
-        if (isAdmin) {
-            Text("Tipp: Kachel lange drücken = Position der Baustelle auf deinen jetzigen Standort setzen.", color = Color(0xFF6A6F75), fontSize = 13.sp)
-            OutlinedButton(onClick = onNewSite, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                Text("Neue Baustelle hier anlegen")
+            if (isAdmin) {
+                Text("Tipp: Kachel lange drücken = Position der Baustelle auf deinen jetzigen Standort setzen.", color = Color(0xFF6A6F75), fontSize = 13.sp)
+                OutlinedButton(onClick = onNewSite, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Text("Neue Baustelle hier anlegen")
+                }
             }
-        }
-        OutlinedButton(onClick = onSaveHaendler, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            Text("Ort hier speichern (zum Beispiel Händler)")
+            OutlinedButton(onClick = onSaveHaendler, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text("Ort hier speichern (zum Beispiel Händler)")
+            }
         }
         Spacer(Modifier.height(8.dp))
     }
@@ -1041,6 +1071,27 @@ suspend fun downloadAndInstall(ctx: android.content.Context, onProgress: (Int) -
         null
     } catch (e: Exception) {
         e.message ?: "Herunterladen fehlgeschlagen"
+    }
+}
+
+/** Frage beim Losfahren von der Firma: Privatauto oder Firmenwagen? Bleibt offen, bis sie beantwortet ist (spätestens beim Abgeben). */
+@Composable
+fun VehicleCard(b: TimelineBlock, onAnswer: (TimelineBlock, String) -> Unit) {
+    val at = timeFmt.format(Instant.ofEpochMilli(b.start))
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0xFFFFF3C4)).border(2.dp, Color(0xFFF5C400), RoundedCornerShape(14.dp)).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Womit fährst du weiter?", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text("Du bist um $at Uhr von der Firma losgefahren.", fontSize = 14.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = { onAnswer(b, "privat") }, modifier = Modifier.weight(1f).height(96.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("🏎️", fontSize = 34.sp); Text("Privatauto", fontWeight = FontWeight.ExtraBold) }
+            }
+            Button(onClick = { onAnswer(b, "firma") }, modifier = Modifier.weight(1f).height(96.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("🚐", fontSize = 34.sp); Text("Firmenwagen", fontWeight = FontWeight.ExtraBold) }
+            }
+        }
     }
 }
 

@@ -1,5 +1,8 @@
 package de.ostash.spur
 
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -146,7 +149,13 @@ fun isCommuteBlock(blocks: List<TimelineBlock>, i: Int, siteMap: Map<Long, SiteR
     return (first && isBase(blocks.getOrNull(i + 1))) || (last && isBase(blocks.getOrNull(i - 1)))
 }
 
-fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixedKm: Double = 0.0): List<SheetLine> {
+/** Fahrten, die direkt nach einem Abschnitt an der Firma beginnen. Dort fragt die App: Privatauto oder Firmenwagen? */
+fun firmaDepartures(blocks: List<TimelineBlock>, siteMap: Map<Long, SiteRow>): List<TimelineBlock> =
+    blocks.filterIndexed { i, b ->
+        b.isTravel && i > 0 && blocks[i - 1].let { !it.isTravel && it.siteId != null && siteMap[it.siteId]?.system == "firma" }
+    }
+
+fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixedKm: Double = 0.0, privateCar: Boolean = true): List<SheetLine> {
     val blocks = buildTimeline(day.startedAt, day.endedAt, now, db.segmentsOfDay(day.id), siteMap)
     val points = db.pointsSince(day.id, day.startedAt)
     val fallback = db.lastVehicle()
@@ -158,7 +167,13 @@ fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixe
         SheetLine(kind, b.label + (b.stripeText?.let { " ($it)" } ?: ""), b.siteId, b.start, b.end, auto).also { l ->
             if (travel) {
                 val mark = db.tripMark(day.id, b.start)
-                l.vehicle = mark?.vehicle ?: fallback
+                val afterFirma = idx > 0 && blocks[idx - 1].let { !it.isTravel && it.siteId != null && siteMap[it.siteId]?.system == "firma" }
+                l.vehicle = when {
+                    mark != null -> mark.vehicle
+                    !privateCar -> "firma"
+                    afterFirma -> "" // wird beim Abgeben gefragt
+                    else -> fallback
+                }
                 val commute = fixedKm > 0.0 && isCommuteBlock(blocks, idx, siteMap)
                 val km = mark?.km ?: if (commute) fixedKm else auto
                 l.km = if (km == null || km == 0.0) "" else String.format(java.util.Locale.GERMANY, "%.1f", km)
@@ -237,7 +252,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
     val savedJson = remember(day.id) { db.unsentOrSentSheetJson(date) }
     val lines = remember(day.id) {
         mutableStateListOf<SheetLine>().also {
-            it.addAll(if (savedJson != null) savedSheetLines(savedJson, siteMap) else sheetLines(db, day, now, siteMap, commuteKm(ctx)))
+            it.addAll(if (savedJson != null) savedSheetLines(savedJson, siteMap) else sheetLines(db, day, now, siteMap, commuteKm(ctx), Prefs.usesPrivateCar(ctx)))
         }
     }
     val tick = remember { mutableStateOf(0) }
@@ -250,6 +265,9 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
     val paidMs = maxOf(0L, end - start - pauseMin * 60_000L)
     val privKm = lines.filter { it.kind == "travel" && it.vehicle == "privat" }.sumOf { kmValue(it.km) ?: 0.0 }
     val state = db.sheetState(date)
+    val privateCar = Prefs.usesPrivateCar(ctx)
+    fun afterFirma(i: Int) = lines[i].kind == "travel" && i > 0 && lines[i - 1].kind != "travel" && lines[i - 1].siteId?.let { siteMap[it]?.system } == "firma"
+    val openQuestions = key(tick.value) { lines.indices.count { afterFirma(it) && lines[it].vehicle.isEmpty() } }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Zettel für den Tag") },
@@ -263,7 +281,25 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
                             androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.from) { t -> lines.setBoundary(ctx, i, false, t); tick.value++ } }) { Text("von ${hmOf(l.from)}") }
                             androidx.compose.material3.OutlinedButton(onClick = { pickTime(ctx, l.to) { t -> lines.setBoundary(ctx, i, true, t); tick.value++ } }) { Text("bis ${hmOf(l.to)}") }
                         }
-                        if (l.kind == "travel") {
+                        if (l.kind == "travel" && privateCar && afterFirma(i)) {
+                            Text("Womit bist du hier gefahren?", fontSize = 14.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                for ((v, sym, name) in listOf(Triple("privat", "🏎️", "Privatauto"), Triple("firma", "🚐", "Firmenwagen"))) {
+                                    val on = l.vehicle == v
+                                    Button(
+                                        onClick = { l.vehicle = v; tick.value++ },
+                                        modifier = Modifier.weight(1f).height(72.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = if (on) Color(0xFF1B1C1E) else Color.White, contentColor = if (on) Color.White else Color(0xFF1B1C1E)),
+                                        border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF1B1C1E)),
+                                    ) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(sym, fontSize = 26.sp); Text(name, fontWeight = FontWeight.Bold, fontSize = 13.sp) } }
+                                }
+                            }
+                        }
+                        var detail by remember { mutableStateOf(false) }
+                        if (l.kind == "travel" && privateCar) {
+                            TextButton(onClick = { detail = !detail }) { Text(if (detail) "Fahrzeug und km ausblenden ▲" else "Fahrzeug und km ändern ▼", fontSize = 13.sp) }
+                        }
+                        if (l.kind == "travel" && privateCar && detail) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FilterChip(selected = l.vehicle == "privat", onClick = { l.vehicle = "privat"; tick.value++ }, label = { Text("Privatauto") })
                                 FilterChip(selected = l.vehicle == "firma", onClick = { l.vehicle = "firma"; tick.value++ }, label = { Text("Firmenauto") })
@@ -288,15 +324,16 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.width(220.dp),
                 )
+                if (openQuestions > 0) Text("Bitte oben antworten: Womit bist du von der Firma gefahren?", color = Color(0xFFB3261E), fontWeight = FontWeight.Bold)
                 key(tick.value) {
-                    Text("Bezahlt: ${formatDuration(paidMs)} h · Privatauto: ${String.format(java.util.Locale.GERMANY, "%.1f", privKm)} km", fontWeight = FontWeight.Bold)
+                    Text(if (privateCar) "Bezahlt: ${formatDuration(paidMs)} h · Privatauto: ${String.format(java.util.Locale.GERMANY, "%.1f", privKm)} km" else "Bezahlt: ${formatDuration(paidMs)} h", fontWeight = FontWeight.Bold)
                 }
                 if (state == 0) Text("Zettel ist vorgemerkt und geht ab, sobald Internet da ist.", color = Color(0xFF6A6F75), fontSize = 13.sp)
                 if (state == 1) Text("Zettel wurde abgegeben. Du kannst ihn ändern und noch einmal abgeben.", color = Color(0xFF6A6F75), fontSize = 13.sp)
             }
         },
         confirmButton = {
-            Button(onClick = {
+            Button(enabled = openQuestions == 0, onClick = {
                 for (l in lines) if (l.kind == "travel") db.saveTripMark(day.id, l.from, l.vehicle, kmValue(l.km))
                 db.saveDayPause(day.id, pauseMin)
                 queueSheetJson(db, day, start, end, pauseMin, lines)
@@ -307,7 +344,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
         dismissButton = {
             Row {
                 if (savedJson != null) TextButton(onClick = {
-                    lines.clear(); lines.addAll(sheetLines(db, day, now, siteMap, commuteKm(ctx))); tick.value++
+                    lines.clear(); lines.addAll(sheetLines(db, day, now, siteMap, commuteKm(ctx), Prefs.usesPrivateCar(ctx))); tick.value++
                 }) { Text("Neu aus dem Tag") }
                 TextButton(onClick = onDismiss) { Text("Später") }
             }
