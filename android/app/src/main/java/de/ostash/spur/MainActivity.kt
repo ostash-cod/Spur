@@ -1083,7 +1083,7 @@ fun VehicleCard(b: TimelineBlock, onAnswer: (TimelineBlock, String) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("Womit fährst du weiter?", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Text("Du bist um $at Uhr von der Firma losgefahren.", fontSize = 14.sp)
+        Text("Du bist um $at Uhr von der Firma oder vom Lager losgefahren.", fontSize = 14.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(onClick = { onAnswer(b, "privat") }, modifier = Modifier.weight(1f).height(96.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1B1C1E), contentColor = Color.White)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("🏎️", fontSize = 34.sp); Text("Privatauto", fontWeight = FontWeight.ExtraBold) }

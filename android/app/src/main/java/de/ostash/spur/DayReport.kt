@@ -152,7 +152,7 @@ fun isCommuteBlock(blocks: List<TimelineBlock>, i: Int, siteMap: Map<Long, SiteR
 /** Fahrten, die direkt nach einem Abschnitt an der Firma beginnen. Dort fragt die App: Privatauto oder Firmenwagen? */
 fun firmaDepartures(blocks: List<TimelineBlock>, siteMap: Map<Long, SiteRow>): List<TimelineBlock> =
     blocks.filterIndexed { i, b ->
-        b.isTravel && i > 0 && blocks[i - 1].let { !it.isTravel && it.siteId != null && siteMap[it.siteId]?.system == "firma" }
+        b.isTravel && i > 0 && blocks[i - 1].let { !it.isTravel && it.siteId != null && siteMap[it.siteId]?.system in listOf("firma", "lager") }
     }
 
 fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixedKm: Double = 0.0, privateCar: Boolean = true): List<SheetLine> {
@@ -167,7 +167,7 @@ fun sheetLines(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, fixe
         SheetLine(kind, b.label + (b.stripeText?.let { " ($it)" } ?: ""), b.siteId, b.start, b.end, auto).also { l ->
             if (travel) {
                 val mark = db.tripMark(day.id, b.start)
-                val afterFirma = idx > 0 && blocks[idx - 1].let { !it.isTravel && it.siteId != null && siteMap[it.siteId]?.system == "firma" }
+                val afterFirma = idx > 0 && blocks[idx - 1].let { !it.isTravel && it.siteId != null && siteMap[it.siteId]?.system in listOf("firma", "lager") }
                 l.vehicle = when {
                     mark != null -> mark.vehicle
                     !privateCar -> "firma"
@@ -266,7 +266,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
     val privKm = lines.filter { it.kind == "travel" && it.vehicle == "privat" }.sumOf { kmValue(it.km) ?: 0.0 }
     val state = db.sheetState(date)
     val privateCar = Prefs.usesPrivateCar(ctx)
-    fun afterFirma(i: Int) = lines[i].kind == "travel" && i > 0 && lines[i - 1].kind != "travel" && lines[i - 1].siteId?.let { siteMap[it]?.system } == "firma"
+    fun afterFirma(i: Int) = lines[i].kind == "travel" && i > 0 && lines[i - 1].kind != "travel" && lines[i - 1].siteId?.let { siteMap[it]?.system } in listOf("firma", "lager")
     val openQuestions = key(tick.value) { lines.indices.count { afterFirma(it) && lines[it].vehicle.isEmpty() } }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -324,7 +324,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.width(220.dp),
                 )
-                if (openQuestions > 0) Text("Bitte oben antworten: Womit bist du von der Firma gefahren?", color = Color(0xFFB3261E), fontWeight = FontWeight.Bold)
+                if (openQuestions > 0) Text("Bitte oben antworten: Womit bist du von Firma oder Lager gefahren?", color = Color(0xFFB3261E), fontWeight = FontWeight.Bold)
                 key(tick.value) {
                     Text(if (privateCar) "Bezahlt: ${formatDuration(paidMs)} h · Privatauto: ${String.format(java.util.Locale.GERMANY, "%.1f", privKm)} km" else "Bezahlt: ${formatDuration(paidMs)} h", fontWeight = FontWeight.Bold)
                 }
