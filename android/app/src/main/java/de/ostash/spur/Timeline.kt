@@ -162,7 +162,7 @@ fun VanIcon(modifier: Modifier = Modifier) {
     }
 }
 
-/** Senkrechter Zeitbalken wie am Desktop: eine Stunde ist 66 dp hoch. */
+/** Senkrechter Tagesverlauf: Blöcke untereinander, links die Startzeit jedes Blocks. */
 @Composable
 fun DayTimeline(blocks: List<TimelineBlock>) {
     if (blocks.isEmpty()) return
@@ -177,16 +177,11 @@ fun DayTimeline(blocks: List<TimelineBlock>) {
         prevBottom = top + h
         Triple(b, top, h)
     }
-    val total = maxOf(totalMin * dpPerMin, prevBottom + 6f)
+    val total = prevBottom + 6f
     Box(Modifier.fillMaxWidth().height(total.dp)) {
-        var m = 0f
-        while (m <= totalMin) {
-            val y = (m * dpPerMin).dp
-            Text(hm(t0 + (m * 60_000).toLong()), fontSize = 11.sp, color = Color(0xFF6A6F75), modifier = Modifier.offset(y = y - 8.dp).width(40.dp))
-            Box(Modifier.offset(x = 44.dp, y = y).fillMaxWidth().height(1.dp).background(Color(0xFFDCDFE2)))
-            m += 60f
-        }
         for ((b, top, h) in placed) {
+            // Links steht die Startzeit jedes Blocks. Eine maßstabsgetreue Stundenskala stimmt nicht, weil kurze Blöcke größer gezeichnet werden und die folgenden nach unten schieben.
+            Text(hm(b.start), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4B5159), modifier = Modifier.offset(y = (top + h / 2f - 9f).dp).width(44.dp))
             val bg = if (b.isTravel) Gelb else Color(android.graphics.Color.parseColor(b.colorHex ?: "#B8BCC2"))
             val stripe = b.stripeHex?.let { Color(android.graphics.Color.parseColor(it)) }
             // Händler bleiben braun, auch in einer Materialfahrt (dann mit Streifen der Baustelle); Fahrten sind gelb.
