@@ -144,9 +144,38 @@ fun SpurApp() {
         }
     }
     var noticeOk by remember { mutableStateOf(Prefs.noticeOk(ctx)) }
+    var welcomed by remember { mutableStateOf(Prefs.welcomed(ctx)) }
     if (!loggedIn) LoginScreen(onDone = { loggedIn = true })
+    else if (!noticeOk && !welcomed) WelcomeScreen(onDone = { Prefs.setWelcomed(ctx); welcomed = true })
     else if (!noticeOk) NoticeScreen(onDone = { noticeOk = true })
     else MainScreen()
+}
+
+/** Beim ersten Start: persönliche Begrüßung in drei Sprachen, danach der Hinweis. */
+@Composable
+fun WelcomeScreen(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val first = Prefs.userName(ctx).trim().substringBefore(' ')
+    Box(Modifier.fillMaxSize().background(Anthrazit).statusBarsPadding()) {
+        Column(
+            Modifier.fillMaxSize().padding(16.dp).background(Color.White, MaterialTheme.shapes.large).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                for ((hello, text) in listOf(
+                    "Herzlich willkommen, $first!" to "Schön, dass du dabei bist. Mit „Spur“ schreibst du deinen Arbeitszettel selbst, von Hand oder mit Hilfe der App. Als Nächstes kommt eine wichtige Information. Bitte lies sie in Ruhe.",
+                    "Ласкаво просимо, $first!" to "Радий, що ти з нами. У «Spur» ти сам заповнюєш свій робочий листок, вручну або з допомогою застосунку. Далі буде важлива інформація. Будь ласка, прочитай її уважно.",
+                    "Добро пожаловать, $first!" to "Рады, что ты с нами. В «Spur» ты сам заполняешь свой рабочий листок, вручную или с помощью приложения. Дальше будет важная информация. Пожалуйста, прочитай её внимательно.",
+                )) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(hello, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                        Text(text, fontSize = 15.sp)
+                    }
+                }
+            }
+            Button(modifier = Modifier.fillMaxWidth().height(56.dp), onClick = onDone) { Text("Weiter · Далі · Далее", fontWeight = FontWeight.Bold) }
+        }
+    }
 }
 
 /** Beim ersten Start: Hinweis zur Testphase lesen und mit Haken bestätigen. Der Beleg geht zum Server, wenn Internet da ist. */

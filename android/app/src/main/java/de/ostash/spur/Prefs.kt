@@ -21,6 +21,8 @@ object Prefs {
 
     fun token(c: Context): String? = sp(c).getString("token", null)
     fun userName(c: Context): String = sp(c).getString("name", "") ?: ""
+    fun welcomed(c: Context): Boolean = sp(c).getBoolean("welcomed", false)
+    fun setWelcomed(c: Context) { sp(c).edit().putBoolean("welcomed", true).apply() }
     fun usesPrivateCar(c: Context): Boolean = sp(c).getBoolean("car", false)
     fun isAdmin(c: Context): Boolean = sp(c).getBoolean("admin", false)
     fun setAdmin(c: Context, admin: Boolean) { sp(c).edit().putBoolean("admin", admin).apply() }
