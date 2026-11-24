@@ -43,7 +43,7 @@ object Prefs {
     fun pointsHours(c: Context): Int = sp(c).getInt("points_hours", 48)
     fun setPointsHours(c: Context, v: Int) { sp(c).edit().putInt("points_hours", v.coerceIn(24, 168)).apply() }
     // --- Datenschutzhinweis: Bestätigung mit Haken beim ersten Start ---
-    const val NOTICE_VERSION = "test-1"
+    const val NOTICE_VERSION = "art13-1"
     fun noticeOk(c: Context): Boolean = sp(c).getString("notice_version", null) == NOTICE_VERSION
     fun noticeSent(c: Context): Boolean = sp(c).getBoolean("notice_sent", false)
     fun noticeLang(c: Context): String = sp(c).getString("notice_lang", "de") ?: "de"

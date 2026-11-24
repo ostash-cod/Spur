@@ -177,7 +177,10 @@ fun NoticeScreen(onDone: () -> Unit) {
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(t.title, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-                for (line in t.items) Text("• $line", fontSize = 15.sp)
+                for (line in t.items) {
+                    Text(line.substringBefore('\n'), fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+                    Text(line.substringAfter('\n', ""), fontSize = 15.sp)
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = checked, onCheckedChange = { checked = it })
