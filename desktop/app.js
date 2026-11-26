@@ -1,5 +1,7 @@
 // Spur – Desktop-Oberfläche (Schritt 1: Anmeldung, Mitarbeiter, Einstellungen)
 
+import { canPickFolder, rememberedFolder, pickFolder, ensureWrite, planExport, writePlan, buildZip } from './foto-export.js';
+
 const $ = (id) => document.getElementById(id);
 
 let token = null;
@@ -1577,6 +1579,77 @@ async function photoUrl(id) {
   return u;
 }
 
+// --- Fotos exportieren: Fotos eines Tages (und einer Baustelle) in einen Ordner am PC oder als ZIP -----
+// photos: [{ id, taken_at, user_name, site }], date: 'JJJJ-MM-TT'. Nichts wird gelöscht, überschrieben oder verkleinert.
+async function fotoExportDialog(photos, date) {
+  const siteNames = [...new Set(photos.map((p) => p.site || 'Ohne Baustelle'))];
+  const countOf = (name) => photos.filter((p) => (p.site || 'Ohne Baustelle') === name).length;
+  const siteSel = h('select', { id: 'fx-site', style: 'max-width:none' },
+    ...(siteNames.length > 1 ? [h('option', { value: '' }, `Alle Baustellen (${photos.length} Fotos)`)] : []),
+    ...siteNames.map((n) => h('option', { value: n }, `${n} (${countOf(n)} Fotos)`)));
+  const folderOut = h('strong', {});
+  const status = h('p', { class: 'hint', style: 'min-height:1.4em' });
+  const err = h('p', { class: 'error' });
+  let folder = canPickFolder() ? await rememberedFolder() : null;
+  const showFolder = () => { folderOut.textContent = folder ? folder.name : 'noch keiner gewählt'; };
+  showFolder();
+  const chosen = () => photos.filter((p) => !siteSel.value || (p.site || 'Ohne Baustelle') === siteSel.value);
+  const fetchBytes = async (p) => {
+    const res = await fetch(`/api/photos/${p.id}/file`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Foto von ${fmtTime(p.taken_at)} Uhr nicht ladbar`);
+    return res.arrayBuffer();
+  };
+  const busy = (on) => { for (const b of d.querySelectorAll('button')) b.disabled = on; };
+  const progress = (done, total) => { status.textContent = `${done} von ${total} Fotos …`; };
+  const pick = async () => {
+    err.textContent = '';
+    try { folder = await pickFolder(); showFolder(); } catch (e) { if (e.name !== 'AbortError') err.textContent = e.message; }
+  };
+  const doFolder = async () => {
+    err.textContent = ''; status.textContent = '';
+    try {
+      if (!folder) { folder = await pickFolder(); showFolder(); }
+      if (!(await ensureWrite(folder))) { err.textContent = 'Ohne Schreibrecht kann ich nichts speichern. Bitte den Ordner neu wählen.'; return; }
+      busy(true);
+      const r = await writePlan(folder, planExport(chosen()), date, fetchBytes, progress);
+      status.textContent = `Fertig: ${r.written} Foto(s) gespeichert${r.skipped ? `, ${r.skipped} lagen schon da` : ''}. Ordner: ${folder.name}\\${r.folders.join(` und ${folder.name}\\`)}`;
+    } catch (e) {
+      if (e.name !== 'AbortError') err.textContent = `Das hat nicht geklappt: ${e.message}`;
+    } finally { busy(false); }
+  };
+  const doZip = async () => {
+    err.textContent = ''; status.textContent = '';
+    try {
+      busy(true);
+      const zip = await buildZip(planExport(chosen()), date, fetchBytes, progress);
+      const url = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+      const a = h('a', { href: url, download: `Spur-Fotos-${date}.zip` });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      status.textContent = `Fertig: ZIP-Datei mit ${chosen().length} Foto(s) geladen. Entpacken in den Baustellen-Ordner.`;
+    } catch (e) {
+      err.textContent = `Das hat nicht geklappt: ${e.message}`;
+    } finally { busy(false); }
+  };
+  const d = openDialog(
+    h('div', { class: 'actions', style: 'justify-content:space-between;align-items:center;margin:0' },
+      h('h2', { style: 'margin:0' }, `Fotos exportieren · ${date.split('-').reverse().join('.')}`),
+      h('button', { class: 'small', 'aria-label': 'Schließen', onclick: () => d.close() }, '✕')),
+    h('label', { for: 'fx-site', style: 'margin-top:12px' }, 'Baustelle'), siteSel,
+    canPickFolder()
+      ? h('div', {},
+          h('p', { style: 'margin:12px 0 4px' }, 'Ziel-Ordner: ', folderOut, ' ', h('button', { class: 'small', onclick: pick }, 'Ordner wählen …')),
+          h('p', { class: 'hint', style: 'margin:0' }, 'Wähle einmal den Ordner „Laufende Baustellen“ (Google Drive). Darin entsteht je Baustelle: Fotos\\Spur <Datum>. Gibt es den Baustellen-Ordner schon, wird er benutzt.'))
+      : h('p', { class: 'hint', style: 'margin-top:12px' }, 'Dieser Browser kann keinen Ordner direkt beschreiben. Nimm Chrome oder Edge, oder lade die ZIP-Datei.'),
+    h('p', { class: 'hint' }, 'Die Fotos behalten ihre Größe aus der App. Dazu kommt eine Liste fotos.csv. Es wird nichts gelöscht und nichts überschrieben.'),
+    status, err,
+    h('div', { class: 'actions', style: 'margin-top:10px;flex-wrap:wrap' },
+      canPickFolder() ? h('button', { class: 'primary', onclick: doFolder }, 'In den Ordner speichern') : null,
+      h('button', { class: canPickFolder() ? '' : 'primary', onclick: doZip }, 'Als ZIP laden'),
+      h('button', { onclick: () => d.close() }, 'Schließen')),
+  );
+}
+
 // items: [{ id, caption }], start: Nummer des Bildes, das zuerst erscheint
 function photoViewer(items, start = 0) {
   let i = Math.min(Math.max(start, 0), items.length - 1);
@@ -1721,6 +1794,9 @@ async function tagesansicht(main, userId, dateStr) {
         ...notes.map((n) => h('div', { style: 'margin:0 0 10px' },
           h('strong', {}, (n.kind === 'material' ? '📦 Material · ' : '') + (n.site_id ? siteById.get(n.site_id)?.name ?? 'Baustelle' : 'Ohne Baustelle')),
           h('div', { style: 'white-space:pre-wrap' }, n.text))),
+        photos.length
+          ? h('p', { style: 'margin:0 0 10px' }, h('button', { id: 'foto-export', class: 'primary', onclick: () => fotoExportDialog(photos.map((p) => ({ id: p.id, taken_at: p.taken_at, user_name: p.user_name, site: photoSite(p) })), date) }, `📁 Fotos exportieren (${photos.length})`))
+          : '',
         photos.length ? h('div', {}, ...photos.map(photoView)) : '')
     : null;
 
