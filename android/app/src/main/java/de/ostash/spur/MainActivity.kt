@@ -707,7 +707,7 @@ fun MainScreen() {
         AlertDialog(
             onDismissRequest = { Prefs.clearAutoEnded(ctx); autoEndedDay = 0L },
             title = { Text("Dein Tag wurde beendet") },
-            text = { Text(if (Prefs.autoEndedReason(ctx) == "arrival") "Dein Tag wurde bei deiner Ankunft $clock Uhr beendet. Bitte prüfe die Zeiten auf dem Zettel." else "Die App hat den Tag $clock Uhr beendet, weil keine Antwort kam. Bitte prüfe die Zeiten auf dem Zettel.") },
+            text = { Text(if (Prefs.autoEndedReason(ctx) == "arrival") "Dein Tag wurde bei deiner Ankunft $clock Uhr beendet. Bitte prüfe die Zeiten auf dem Zettel." else if (Instant.ofEpochMilli(endAt).atZone(ZoneId.systemDefault()).toLocalTime() == java.time.LocalTime.MIDNIGHT) "Du hast den Tag nicht beendet. Die App hat ihn um Mitternacht beendet. Das ist wahrscheinlich nicht dein Feierabend. Bitte sage auf dem Zettel, wann du aufgehört hast." else "Die App hat den Tag $clock Uhr beendet, weil keine Antwort kam. Bitte prüfe die Zeiten auf dem Zettel.") },
             confirmButton = {
                 TextButton(onClick = {
                     val id = autoEndedDay

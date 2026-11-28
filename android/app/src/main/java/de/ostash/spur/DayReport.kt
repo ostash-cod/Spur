@@ -2,6 +2,7 @@ package de.ostash.spur
 
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.background
@@ -217,6 +218,16 @@ fun queueSheetFor(db: Db, day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, f
 }
 
 /** Alle Zeiten auf dem Zettel gehen auf die nächsten 5 Minuten: so sieht man dem Zettel nicht an, wie er entstanden ist. */
+/**
+ * Der Tag wurde von der App um Mitternacht beendet (Notbremse, weil niemand "Tag beenden" gedrückt hat) und die letzte
+ * Zeile des Zettels endet noch dort. Das ist fast sicher nicht der echte Feierabend: erst bestätigen lassen.
+ */
+fun endNeedsConfirm(dayEndedAt: Long?, dayStart: Long, lastLineTo: Long?, zone: ZoneId): Boolean {
+    if (dayEndedAt == null || lastLineTo == null) return false
+    val midnight = EveningPlan.hardStop(dayStart, zone)
+    return Math.abs(dayEndedAt - midnight) < 60_000L && lastLineTo >= midnight - 5 * 60_000L
+}
+
 fun roundTo5(ms: Long): Long = Math.floorDiv(ms + 150_000L, 300_000L) * 300_000L
 
 fun roundPause5(min: Int): Int = ((min + 2) / 5) * 5
@@ -277,12 +288,25 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
     val privateCar = Prefs.usesPrivateCar(ctx)
     fun afterFirma(i: Int) = lines[i].kind == "travel" && i > 0 && lines[i - 1].kind != "travel" && lines[i - 1].siteId?.let { siteMap[it]?.system } in listOf("firma", "lager")
     val openQuestions = key(tick.value) { lines.indices.count { afterFirma(it) && lines[it].vehicle.isEmpty() } }
+    val endQuestion = key(tick.value) { endNeedsConfirm(day.endedAt, day.startedAt, lines.lastOrNull()?.to, ZoneId.systemDefault()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Zettel für den Tag") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("${hmOf(start)} bis ${hmOf(end)} Uhr", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                if (endQuestion) {
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFFFDECEA)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Der Tag lief bis Mitternacht, weil er nicht beendet wurde. Das ist wahrscheinlich nicht dein Feierabend. Wann hast du aufgehört?", fontWeight = FontWeight.Bold, color = Color(0xFFB3261E))
+                        Button(onClick = {
+                            val z = ZoneId.systemDefault()
+                            val d16 = Instant.ofEpochMilli(day.startedAt).atZone(z).toLocalDate().atTime(16, 0).atZone(z).toInstant().toEpochMilli()
+                            val last = lines.last()
+                            pickTime(ctx, maxOf(last.from, d16)) { t -> lines.setBoundary(ctx, lines.lastIndex, true, t); tick.value++ }
+                        }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text("Feierabend wählen", fontWeight = FontWeight.Bold) }
+                        Text("Liegt dein Feierabend vor dem Beginn der letzten Zeile, ändere unten zuerst das „von“ dieser Zeile.", fontSize = 13.sp)
+                    }
+                }
                 lines.forEachIndexed { i, l ->
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFFF1F3F5)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(l.label, fontWeight = FontWeight.Bold)
@@ -333,6 +357,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.width(220.dp),
                 )
+                if (endQuestion) Text("Bitte oben sagen, wann du aufgehört hast.", color = Color(0xFFB3261E), fontWeight = FontWeight.Bold)
                 if (openQuestions > 0) Text("Bitte oben antworten: Womit bist du von Firma oder Lager gefahren?", color = Color(0xFFB3261E), fontWeight = FontWeight.Bold)
                 key(tick.value) {
                     Text(if (privateCar) "Bezahlt: ${formatDuration(paidMs)} h · Privatauto: ${String.format(java.util.Locale.GERMANY, "%.1f", privKm)} km" else "Bezahlt: ${formatDuration(paidMs)} h", fontWeight = FontWeight.Bold)
@@ -342,7 +367,7 @@ fun SheetDialog(day: DayRow, now: Long, siteMap: Map<Long, SiteRow>, onDismiss: 
             }
         },
         confirmButton = {
-            Button(enabled = openQuestions == 0, onClick = {
+            Button(enabled = openQuestions == 0 && !endQuestion, onClick = {
                 for (l in lines) if (l.kind == "travel") db.saveTripMark(day.id, l.from, l.vehicle, kmValue(l.km))
                 db.saveDayPause(day.id, pauseMin)
                 queueSheetJson(db, day, start, end, pauseMin, lines)

@@ -1,6 +1,10 @@
 package de.ostash.spur
 
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DayReportTest {
@@ -24,6 +28,28 @@ class DayReportTest {
             PointRow(5, 4000, 48.01001, 11.0, 10f), // Wackler, zählt nicht
         )
         assertEquals(1.11, routeKm(pts, 0, 10_000), 0.03)
+    }
+}
+
+class EndConfirmTest {
+    private val z = ZoneId.of("Europe/Berlin")
+    private fun t(d: Int, h: Int, m: Int = 0) = ZonedDateTime.of(2026, 11, d, h, m, 0, 0, z).toInstant().toEpochMilli()
+    private val start = t(25, 7, 57)
+    private val midnight = t(26, 0)
+
+    @Test fun tagBisMitternachtMussBestaetigtWerden() {
+        assertTrue(endNeedsConfirm(midnight, start, midnight, z))
+        assertTrue(endNeedsConfirm(midnight, start, midnight - 3 * 60_000L, z))
+    }
+
+    @Test fun nachKorrekturDerLetztenZeileIstEsGut() {
+        assertFalse(endNeedsConfirm(midnight, start, t(25, 16, 30), z))
+    }
+
+    @Test fun normalerFeierabendOderOffenerTagFrageNichtNach() {
+        assertFalse(endNeedsConfirm(t(25, 16, 30), start, t(25, 16, 30), z))
+        assertFalse(endNeedsConfirm(null, start, null, z))
+        assertFalse(endNeedsConfirm(midnight, start, null, z))
     }
 }
 
